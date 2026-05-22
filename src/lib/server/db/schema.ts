@@ -19,6 +19,8 @@ export const races = pgTable('races', {
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
 	name: text('name').notNull(),
+	/** Base event name without distance suffix (e.g. "Bergen City Marathon") */
+	eventName: text('event_name'),
 	/** 'local' | 'norway' | 'international' */
 	category: text('category').notNull(),
 	distanceKm: real('distance_km'),
@@ -27,6 +29,8 @@ export const races = pgTable('races', {
 	country: text('country').notNull().default('NO'),
 	raceDate: timestamp('race_date'),
 	registrationUrl: text('registration_url'),
+	websiteUrl: text('website_url'),
+	imageUrl: text('image_url'),
 	sourceUrl: text('source_url'),
 	/** 'confirmed' | 'likely' | 'unclear' */
 	medalStatus: text('medal_status').notNull().default('unclear'),

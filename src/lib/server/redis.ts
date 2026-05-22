@@ -77,3 +77,13 @@ export async function getHash(key: string): Promise<Record<string, string> | nul
 		return null;
 	}
 }
+
+export async function pingRedis(): Promise<boolean> {
+	if (!redis) return false;
+	try {
+		const result = await redis.ping();
+		return result === 'PONG';
+	} catch {
+		return false;
+	}
+}

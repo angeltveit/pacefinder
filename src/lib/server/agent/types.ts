@@ -8,6 +8,7 @@ export interface RawRaceLead {
 
 export interface ClassifiedRace {
 	name: string;
+	eventName: string;
 	category: 'local' | 'norway' | 'international';
 	distanceKm: number | null;
 	location: string | null;
@@ -15,6 +16,8 @@ export interface ClassifiedRace {
 	country: string;
 	raceDate: Date | null;
 	registrationUrl: string | null;
+	websiteUrl: string | null;
+	imageUrl: string | null;
 	sourceUrl: string;
 	medalStatus: 'confirmed' | 'likely' | 'unclear';
 	registrationStatus: 'open' | 'opening_soon' | 'unknown' | 'closed';

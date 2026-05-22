@@ -22,7 +22,7 @@
 	}
 </script>
 
-<svelte:head><title>My Profile — RaceScout</title></svelte:head>
+<svelte:head><title>My Profile — PaceFinder</title></svelte:head>
 
 <div class="space-y-8">
 	<div>

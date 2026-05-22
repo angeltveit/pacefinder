@@ -1,12 +1,14 @@
 import { db } from '$lib/server/db';
-import { races, agentRuns, user, comments } from '$lib/server/db/schema';
-import { desc, eq, sql, gt } from 'drizzle-orm';
-import { getHash, getStat, KEYS } from '$lib/server/redis';
+import { races, agentRuns, user, comments, settings } from '$lib/server/db/schema';
+import { desc, eq, sql, gt, gte, and, isNull } from 'drizzle-orm';
+import { getHash, getStat, pingRedis, KEYS } from '$lib/server/redis';
+import { env } from '$env/dynamic/private';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async () => {
 	const now = new Date();
 	const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+	const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
 	// DB queries in parallel
 	const [
@@ -18,7 +20,9 @@ export const load: PageServerLoad = async () => {
 		totalCommentsRow,
 		lastRuns,
 		topInterested,
-		topCommented
+		topCommented,
+		monthlySpendRow,
+		budgetRow
 	] = await Promise.all([
 		db.select({ count: sql<number>`count(*)` }).from(user),
 		db.select({ count: sql<number>`count(*)` }).from(user).where(gt(user.createdAt, yesterday)),
@@ -50,11 +54,23 @@ export const load: PageServerLoad = async () => {
 			})
 			.from(races)
 			.orderBy(sql`count desc`)
-			.limit(5)
+			.limit(5),
+		db
+			.select({ spend: sql<number>`coalesce(sum(${agentRuns.estimatedCostUsd}), 0)` })
+			.from(agentRuns)
+			.where(gte(agentRuns.startedAt, startOfMonth)),
+		db.query.settings.findFirst({
+			where: and(
+				eq(settings.scope, 'system'),
+				eq(settings.key, 'llm_monthly_budget_usd'),
+				isNull(settings.userId)
+			)
+		})
 	]);
 
 	// Redis stats (may be null if Redis unavailable)
-	const [redisLastRun, costAlltime, costToday, tokensInToday, tokensOutToday] = await Promise.all([
+	const [redisAvailable, redisLastRun, costAlltime, costToday, tokensInToday, tokensOutToday] = await Promise.all([
+		pingRedis(),
 		getHash(KEYS.AGENT_LAST_RUN),
 		getStat(KEYS.TOKENS_COST_ALLTIME),
 		getStat(KEYS.TOKENS_COST_TODAY),
@@ -72,7 +88,7 @@ export const load: PageServerLoad = async () => {
 			totalComments: Number(totalCommentsRow[0].count)
 		},
 		redis: {
-			available: !!redisLastRun,
+			available: redisAvailable,
 			costAlltime: costAlltime ? Number(costAlltime).toFixed(4) : null,
 			costToday: costToday ? Number(costToday).toFixed(4) : null,
 			tokensInToday: tokensInToday ? Number(tokensInToday) : null,
@@ -84,6 +100,12 @@ export const load: PageServerLoad = async () => {
 			finishedAt: r.finishedAt?.toISOString() ?? null
 		})),
 		topInterested,
-		topCommented
+		topCommented,
+		budget: {
+			monthlySpend: Number(monthlySpendRow[0].spend),
+			monthlyBudget: budgetRow
+				? parseFloat(budgetRow.value)
+				: parseFloat(env.MONTHLY_LLM_BUDGET_USD ?? '10')
+		}
 	};
 };

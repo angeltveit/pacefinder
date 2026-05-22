@@ -5,7 +5,7 @@
 	let error = $state('');
 </script>
 
-<svelte:head><title>Log in — RaceScout</title></svelte:head>
+<svelte:head><title>Log in — PaceFinder</title></svelte:head>
 
 <div class="flex min-h-[70vh] items-center justify-center">
 	<div class="w-full max-w-sm">

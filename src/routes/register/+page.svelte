@@ -3,7 +3,7 @@
 	let error = $state('');
 </script>
 
-<svelte:head><title>Sign up — RaceScout</title></svelte:head>
+<svelte:head><title>Sign up — PaceFinder</title></svelte:head>
 
 <div class="flex min-h-[70vh] items-center justify-center">
 	<div class="w-full max-w-sm">

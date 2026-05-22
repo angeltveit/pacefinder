@@ -5,9 +5,9 @@
 	let { children, data } = $props();
 </script>
 
-<div class="min-h-screen bg-slate-50 font-sans">
+<div class="min-h-screen font-sans" style="background:#0c0f1a;">
 	<Navbar user={data?.user ?? null} />
-	<main class="mx-auto max-w-3xl px-4 py-8">
+	<main class="mx-auto max-w-lg px-4 pb-24 pt-6">
 		{@render children()}
 	</main>
 </div>

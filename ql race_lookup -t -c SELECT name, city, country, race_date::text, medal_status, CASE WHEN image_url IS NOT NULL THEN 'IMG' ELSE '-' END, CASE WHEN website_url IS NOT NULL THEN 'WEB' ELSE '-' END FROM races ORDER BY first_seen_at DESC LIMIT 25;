@@ -1,0 +1,24 @@
+                       name                        |    city    | country |      race_date      | medal_status | has_image | has_website 
+---------------------------------------------------+------------+---------+---------------------+--------------+-----------+-------------
+ The Arctic Run 2026 – Half Marathon               | Vesterålen | NO      | 2026-06-06 00:00:00 | likely       | t         | t
+ The Arctic Run 2026 – Marathon                    | Vesterålen | NO      | 2026-06-06 00:00:00 | likely       | t         | t
+ Trondheim Maraton 2026                            | Trondheim  | NO      | 2026-09-06 00:00:00 | likely       | t         | t
+ Midnight Sun Marathon 2026 – 5 km                 | Tromsø     | NO      | 2026-06-20 00:00:00 | likely       | t         | t
+ Midnight Sun Marathon 2026 – 10 km                | Tromsø     | NO      | 2026-06-20 00:00:00 | likely       | t         | t
+ Midnight Sun Marathon 2026 – Marathon             | Tromsø     | NO      | 2026-06-20 00:00:00 | confirmed    | t         | t
+ Midnight Sun Marathon 2026 – Half Marathon        | Tromsø     | NO      | 2026-06-20 00:00:00 | confirmed    | t         | t
+ Fjordkraft Bergen City Milen 2026                 | Bergen     | NO      | 2026-09-12 00:00:00 | likely       | t         | t
+ Tromsø Midnight Sun Marathon 2026 – Marathon      | Tromsø     | NO      | 2026-06-20 00:00:00 | likely       | f         | f
+ Tromsø Midnight Sun Marathon 2026 – Half Marathon | Tromsø     | NO      | 2026-06-20 00:00:00 | likely       | f         | f
+ Trondheim Maraton 2026 – Marathon                 | Trondheim  | NO      | 2026-09-06 00:00:00 | likely       | f         | f
+ Fjordkraft Bergen City Milen 2026 – 10 km         | Bergen     | NO      | 2026-09-12 00:00:00 | likely       | f         | f
+ Bergen Fjellmaraton 2026                          | Bergen     | NO      | 2026-06-04 00:00:00 | likely       | f         | f
+ Bergensløpet 2026 – 10 km                         | Bergen     | NO      | 2026-05-23 00:00:00 | likely       | f         | f
+ Bergensløpet 2026 – 5 km                          | Bergen     | NO      | 2026-05-23 00:00:00 | likely       | f         | f
+ Sommernattsløpet Bergen 2026 – 10 km              | Bergen     | NO      | 2026-06-13 00:00:00 | likely       | t         | t
+ Sommernattsløpet Bergen 2026 – 5 km               | Bergen     | NO      | 2026-06-13 00:00:00 | likely       | t         | t
+ Paris Marathon 2027                               | Paris      | FR      | 2027-04-11 00:00:00 | confirmed    | f         | f
+ New York City Marathon 2026                       | New York   | US      | 2026-11-01 00:00:00 | confirmed    | f         | f
+ Chicago Marathon 2026                             | Chicago    | US      | 2026-10-11 00:00:00 | confirmed    | f         | f
+(20 rows)
+

@@ -2,11 +2,26 @@ import { env } from '$env/dynamic/private';
 import type { RawRaceLead } from '../types';
 
 const QUERIES = [
-	'5km 10km løp Bergen 2026 2027 finisher medal',
-	'halvmaraton Oslo Trondheim Stavanger Tromsø 2026 2027 medal',
-	'Berlin London New York Chicago Tokyo Boston Paris Valencia marathon 2026 2027 registration',
-	'Norwegian running race medal 2026 2027 registration open',
-	'scenic marathon half marathon bucket list 2026 2027'
+	// Local Bergen (specific races)
+	'site:bergenslopet.no OR site:bergencitymarathon.no OR site:sommernattslopet.no 2026',
+	'5km 10km løp Bergen Vestland 2026 finisher medalje påmelding',
+	'Bergen halvmaraton maraton løp 2026 2027 medal registration',
+	// Norwegian halfs and marathons (specific cities)
+	'Oslo Maraton halvmaraton 2026 påmelding medal',
+	'Stavanger Marathon halvmaraton 2026 registration',
+	'Trondheim Maraton 2026 halvmaraton påmelding',
+	'Tromsø Midnight Sun Marathon 2026 registration medal',
+	'halvmaraton Norge 2026 Kristiansand Ålesund Bodø Drammen Fredrikstad medal',
+	// International majors
+	'Berlin Marathon 2026 registration entry',
+	'New York City Marathon 2026 entry registration',
+	'Paris Marathon 2027 inscription registration',
+	'London Marathon 2026 2027 entry ballot',
+	'Chicago Tokyo Boston Valencia marathon 2026 2027 registration',
+	'Copenhagen Stockholm Amsterdam marathon half marathon 2026 2027',
+	// Discovery
+	'site:kondis.no løp Bergen Hordaland 2026 2027',
+	'scenic trail marathon half marathon bucket list Europe 2026 2027 medal'
 ];
 
 interface TavilyResult {

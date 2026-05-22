@@ -7,13 +7,6 @@
 	let { raceId, currentStatus = $bindable() }: Props = $props();
 	let loading = $state(false);
 
-	const buttons = [
-		{ status: 'interested', label: '❤️', title: 'Interested' },
-		{ status: 'following', label: '🔔', title: 'Following' },
-		{ status: 'seen', label: '✓', title: 'Seen' },
-		{ status: 'skip', label: '✕', title: 'Skip' }
-	];
-
 	async function setStatus(status: string) {
 		const newStatus = currentStatus === status ? null : status;
 		loading = true;
@@ -30,19 +23,34 @@
 	}
 </script>
 
-<div class="flex items-center gap-1">
-	{#each buttons as btn}
-		<button
-			title={btn.title}
-			disabled={loading}
-			onclick={() => setStatus(btn.status)}
-			class="flex h-8 w-8 items-center justify-center rounded-lg text-sm transition-all
-				{currentStatus === btn.status
-					? 'bg-blue-600 text-white shadow-sm'
-					: 'bg-slate-100 text-slate-500 hover:bg-slate-200'}
-				disabled:opacity-50"
-		>
-			{btn.label}
-		</button>
-	{/each}
+<div class="flex items-center gap-2">
+	<button
+		onclick={() => setStatus('interested')}
+		disabled={loading}
+		class="flex-1 rounded-lg py-2 text-sm font-medium transition-all disabled:opacity-50
+			{currentStatus === 'interested'
+				? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+				: 'bg-white/5 text-slate-400 border border-white/10 hover:bg-white/10 hover:text-slate-300'}"
+	>
+		{currentStatus === 'interested' ? '❤️' : '🤍'} Interested
+	</button>
+	<button
+		onclick={() => setStatus('following')}
+		disabled={loading}
+		class="flex-1 rounded-lg py-2 text-sm font-medium transition-all disabled:opacity-50
+			{currentStatus === 'following'
+				? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+				: 'bg-white/5 text-slate-400 border border-white/10 hover:bg-white/10 hover:text-slate-300'}"
+	>
+		{currentStatus === 'following' ? '🔔' : '🔕'} Track
+	</button>
+	<button
+		onclick={() => setStatus('skip')}
+		disabled={loading}
+		class="rounded-lg px-3 py-2 text-sm transition-all disabled:opacity-50
+			{currentStatus === 'skip'
+				? 'text-slate-400'
+				: 'text-slate-600 hover:text-slate-400 hover:bg-white/5'}"
+		title="Not for me"
+	>✕</button>
 </div>

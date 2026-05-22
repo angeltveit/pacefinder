@@ -1,5 +1,5 @@
 {
-	"name": "race-lookup",
+	"name": "pacefinder",
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
@@ -13,6 +13,7 @@
 		"db:push": "drizzle-kit push",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
+		"db:seed": "node --env-file=.env --experimental-strip-types scripts/seed.ts",
 		"db:studio": "drizzle-kit studio",
 		"auth:schema": "better-auth generate --config src/lib/server/auth.ts --output src/lib/server/db/auth.schema.ts --yes"
 	},

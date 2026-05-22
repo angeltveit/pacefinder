@@ -9,15 +9,12 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const medal = url.searchParams.get('medal') ?? '';
 	const regStatus = url.searchParams.get('reg') ?? '';
 	const myStatus = url.searchParams.get('mine') ?? '';
-	const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'));
-	const pageSize = 20;
 
 	const conditions = [];
 	if (category) conditions.push(eq(races.category, category));
 	if (medal) conditions.push(eq(races.medalStatus, medal));
 	if (regStatus) conditions.push(eq(races.registrationStatus, regStatus));
 
-	// If filtering by myStatus, we need to join
 	const baseQuery = db
 		.select({
 			race: races,
@@ -47,26 +44,77 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const rows = await baseQuery
 		.where(allConditions.length ? and(...allConditions) : undefined)
 		.orderBy(desc(races.firstSeenAt))
-		.limit(pageSize)
-		.offset((page - 1) * pageSize);
+		.limit(200);
 
-	const [countRow] = await db
-		.select({ count: sql<number>`count(*)` })
-		.from(races)
-		.where(conditions.length ? and(...conditions) : undefined);
+	// Group by event_name
+	const eventMap = new Map<string, {
+		eventName: string;
+		category: string;
+		city: string;
+		country: string;
+		raceDate: string | null;
+		medalStatus: string;
+		registrationStatus: string;
+		websiteUrl: string | null;
+		imageUrl: string | null;
+		whyItFits: string | null;
+		interestedCount: number;
+		commentCount: number;
+		myStatus: string | null;
+		distances: { id: string; distanceKm: number | null; registrationUrl: string | null }[];
+		firstSeenAt: string;
+		primaryId: string;
+	}>();
+
+	for (const r of rows) {
+		const key = r.race.eventName ?? r.race.name;
+		const distance = {
+			id: r.race.id,
+			distanceKm: r.race.distanceKm,
+			registrationUrl: r.race.registrationUrl
+		};
+		const existing = eventMap.get(key);
+
+		if (existing) {
+			existing.distances.push(distance);
+			existing.interestedCount += Number(r.interestedCount);
+			existing.commentCount += Number(r.commentCount);
+			if (!existing.imageUrl && r.race.imageUrl) existing.imageUrl = r.race.imageUrl;
+			if (!existing.websiteUrl && r.race.websiteUrl) existing.websiteUrl = r.race.websiteUrl;
+			if (!existing.raceDate && r.race.raceDate) existing.raceDate = r.race.raceDate.toISOString();
+			if (r.race.medalStatus === 'confirmed') existing.medalStatus = 'confirmed';
+			else if (r.race.medalStatus === 'likely' && existing.medalStatus !== 'confirmed') existing.medalStatus = 'likely';
+			if (r.myStatus === 'interested') existing.myStatus = 'interested';
+		} else {
+			eventMap.set(key, {
+				eventName: key,
+				category: r.race.category,
+				city: r.race.city,
+				country: r.race.country,
+				raceDate: r.race.raceDate?.toISOString() ?? null,
+				medalStatus: r.race.medalStatus,
+				registrationStatus: r.race.registrationStatus,
+				websiteUrl: r.race.websiteUrl,
+				imageUrl: r.race.imageUrl,
+				whyItFits: r.race.whyItFits,
+				interestedCount: Number(r.interestedCount),
+				commentCount: Number(r.commentCount),
+				myStatus: r.myStatus ?? null,
+				distances: [distance],
+				firstSeenAt: r.race.firstSeenAt.toISOString(),
+				primaryId: r.race.id
+			});
+		}
+	}
+
+	const events = [...eventMap.values()].map(e => ({
+		...e,
+		distances: e.distances.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0))
+	}));
 
 	return {
-		raceItems: rows.map((r) => ({
-			...r.race,
-			raceDate: r.race.raceDate?.toISOString() ?? null,
-			firstSeenAt: r.race.firstSeenAt.toISOString(),
-			interestedCount: Number(r.interestedCount),
-			commentCount: Number(r.commentCount),
-			myStatus: r.myStatus ?? null
-		})),
-		total: Number(countRow.count),
-		page,
-		pageSize,
+		events,
+		total: events.length,
 		filters: { category, medal, regStatus, myStatus }
 	};
 };

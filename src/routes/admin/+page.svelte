@@ -87,6 +87,52 @@
 		const ms = new Date(end).getTime() - new Date(start).getTime();
 		return ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${(ms / 60000).toFixed(1)}m`;
 	}
+
+	// ── Add race by URL ──────────────────────────────────────────────────────
+	let scrapeUrl = $state('');
+	let scraping = $state(false);
+	let scrapeLogs = $state<string[]>([]);
+	let scrapeResult = $state('');
+
+	async function scrapeRaceUrl() {
+		if (!scrapeUrl.trim()) return;
+		scraping = true;
+		scrapeLogs = [];
+		scrapeResult = '';
+		try {
+			const res = await fetch('/api/admin/races/scrape-url', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ url: scrapeUrl.trim() })
+			});
+			const reader = res.body!.getReader();
+			const decoder = new TextDecoder();
+			let buf = '';
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buf += decoder.decode(value, { stream: true });
+				const parts = buf.split('\n\n');
+				buf = parts.pop() ?? '';
+				for (const part of parts) {
+					const line = part.startsWith('data: ') ? part.slice(6) : null;
+					if (!line) continue;
+					try {
+						const evt = JSON.parse(line);
+						if (evt.type === 'log') scrapeLogs = [...scrapeLogs, evt.message];
+						else if (evt.type === 'done') {
+							if (evt.message) scrapeResult = `✓ ${evt.message}`;
+							else scrapeResult = `✓ Done — ${evt.racesNew} added, ${evt.racesUpdated} updated`;
+						} else if (evt.type === 'error') scrapeResult = `✗ ${evt.error}`;
+					} catch { /* ignore */ }
+				}
+			}
+		} catch {
+			scrapeResult = '✗ Request failed';
+		} finally {
+			scraping = false;
+		}
+	}
 </script>
 
 <svelte:head><title>Admin Dashboard — PaceFinder</title></svelte:head>
@@ -119,6 +165,42 @@
 			{/if}
 		</div>
 	{/if}
+
+	<!-- Add race by URL -->
+	<div class="rounded-2xl border border-slate-200 bg-white p-5">
+		<h2 class="mb-3 font-semibold text-slate-900">Add Race from URL</h2>
+		<p class="mb-3 text-sm text-slate-500">Paste any race page URL — Kondis, Friidrett, the race's own website, etc. The agent will scrape it, classify it, and add it to the database.</p>
+		<div class="flex gap-2">
+			<input
+				type="url"
+				bind:value={scrapeUrl}
+				placeholder="https://example.com/race-page"
+				class="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+				onkeydown={(e) => e.key === 'Enter' && !scraping && scrapeRaceUrl()}
+				disabled={scraping}
+			/>
+			<button
+				onclick={scrapeRaceUrl}
+				disabled={scraping || !scrapeUrl.trim()}
+				class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 whitespace-nowrap"
+			>
+				{scraping ? 'Scraping…' : '⬇ Scrape & Add'}
+			</button>
+		</div>
+		{#if scrapeResult}
+			<p class="mt-2 text-sm {scrapeResult.startsWith('✓') ? 'text-green-700' : 'text-red-600'}">{scrapeResult}</p>
+		{/if}
+		{#if scrapeLogs.length > 0 || scraping}
+			<div class="mt-3 rounded-xl bg-slate-900 p-3 font-mono text-xs text-slate-300 max-h-48 overflow-y-auto">
+				{#each scrapeLogs as line}
+					<div>{line}</div>
+				{/each}
+				{#if scraping}
+					<div class="animate-pulse text-slate-500">_</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
 
 	<!-- Stats grid -->
 	<div class="grid grid-cols-2 gap-4 sm:grid-cols-3">

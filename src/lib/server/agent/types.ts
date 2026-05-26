@@ -16,6 +16,7 @@ export interface ClassifiedRace {
 	country: string;
 	raceDate: Date | null;
 	registrationUrl: string | null;
+	resultsUrl: string | null;
 	websiteUrl: string | null;
 	imageUrl: string | null;
 	sourceUrl: string;

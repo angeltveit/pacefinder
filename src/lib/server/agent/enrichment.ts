@@ -14,6 +14,7 @@ import type { ClassifiedRace } from './types';
 interface EnrichmentResult {
 	raceDate?: string;
 	registrationUrl?: string;
+	resultsUrl?: string;
 	websiteUrl?: string;
 	imageUrl?: string;
 	medalStatus?: 'confirmed' | 'likely' | 'unclear';
@@ -144,36 +145,36 @@ async function tavilyImageSearch(query: string): Promise<string[]> {
 function buildImageQuery(race: ClassifiedRace): string {
 	const name = race.name.replace(/\d{4}/, '').replace(/–.*/, '').trim();
 	const km = race.distanceKm ?? 0;
-	const type = km >= 42 ? 'marathon' : km >= 21 ? 'half marathon' : 'race';
+	const type = km >= 42 ? 'marathon' : km >= 21 ? 'half marathon' : 'running race';
 
 	// Well-known race landmarks for better image results
 	const landmarks: Record<string, string> = {
-		'berlin': 'Brandenburg Gate',
-		'paris': 'Champs-Élysées Arc de Triomphe',
-		'new york': 'Central Park finish line',
-		'nyc': 'Central Park finish line',
-		'chicago': 'Grant Park skyline',
-		'london': 'Tower Bridge',
-		'tokyo': 'Shinjuku',
-		'boston': 'Boylston Street finish',
-		'valencia': 'City of Arts and Sciences',
-		'stockholm': 'Old Town Gamla Stan',
-		'copenhagen': 'Havnen waterfront',
-		'amsterdam': 'Amstel canals',
-		'oslo': 'Rådhusplassen City Hall',
-		'bergen': 'Bryggen wharf',
-		'trondheim': 'Nidarosdomen cathedral',
-		'tromsø': 'Arctic Cathedral midnight sun',
-		'stavanger': 'Lysefjorden'
+		'berlin': 'Brandenburg Gate runners crowd',
+		'paris': 'Champs-Élysées runners pack',
+		'new york': 'Verrazzano Bridge start crowd',
+		'nyc': 'Verrazzano Bridge start crowd',
+		'chicago': 'Grant Park runners skyline',
+		'london': 'Tower Bridge runners',
+		'tokyo': 'Shinjuku runners pack',
+		'boston': 'Boylston Street finish crowd',
+		'valencia': 'City of Arts runners',
+		'stockholm': 'runners Gamla Stan',
+		'copenhagen': 'runners waterfront pack',
+		'amsterdam': 'runners canals crowd',
+		'oslo': 'runners Rådhusplassen start',
+		'bergen': 'runners Bryggen crowd',
+		'trondheim': 'runners Nidarosdomen',
+		'tromsø': 'runners midnight sun crowd',
+		'stavanger': 'runners fjord crowd'
 	};
 
 	const cityLower = race.city.toLowerCase();
 	const landmark = landmarks[cityLower] ?? '';
 
 	if (landmark) {
-		return `${name} ${type} runners ${landmark} photo`;
+		return `${name} ${type} ${landmark} photo`;
 	}
-	return `${name} ${race.city} ${type} runners finish photo`;
+	return `${name} ${race.city} ${type} runners crowd start line photo`;
 }
 
 // ── Agentic enrichment per race ──────────────────────────────────────────────
@@ -184,21 +185,31 @@ GOALS (in priority order):
 1. Find the race's OFFICIAL WEBSITE (not kondis.no, friidrett.no, trainerday.com, or any aggregator)
 2. Find the exact DATE (YYYY-MM-DD format)
 3. Determine if the race gives a FINISHER MEDAL
-4. Find a GREAT COVER PHOTO — this is critical:
-   - IDEAL: Runners on the actual course with recognizable scenery (city landmarks, nature, crowd)
-   - GOOD: Start/finish line with participants, aerial shot of runners
-   - BAD: Logos, icons, maps, sponsor banners, tiny thumbnails, generic stock
-   - The og:image on the race's own website is usually a great photo — USE IT if it shows runners/scenery
-   - If the race website only has a logo, USE the search_images tool to find real race photos
-   - For famous races, search for "[race name] runners [landmark/city]"
+4. Find an AMAZING COVER PHOTO — this is the MOST VISIBLE element of the app:
+   - PRIORITY 1: RUNNERS IN ACTION — a crowd of runners on the course, sweat, motion, legs pumping
+   - PRIORITY 2: COLORFUL & VIBRANT — bright race bibs, confetti, autumn leaves, sunrise/sunset lighting, blue sky
+   - PRIORITY 3: RECOGNIZABLE SCENERY — city landmarks behind runners, dramatic nature, crowds cheering
+   - NEVER use: logos, icons, maps, medals, trophies, sponsor banners, tiny thumbnails, generic stock photos, screenshots, flyers
+   - The og:image on the race's own website is often great IF it shows actual runners — check if it's a real photo vs a graphic/logo
+   - If the race website only has a logo/graphic, you MUST use search_images to find a real race photo
+   - For your image search, be specific: "[race name] runners [landmark]" or "[race name] start line crowd [year]"
+   - A photo with 50+ runners in a pack is ALWAYS better than a single runner or an empty course
 5. Find the REGISTRATION URL
+6. Find the RESULTS URL — the page where finish times are published AFTER the race. This is usually hosted by a timing company:
+   - EQ Timing: look for links like "live.eqtiming.com/event/XXXXX" — must be a SPECIFIC event page, NOT a generic organizationId= schedule page
+   - FriRes: "frfrires.no", "results.brighter.io"
+   - Ultimate.dk: "live.ultimate.dk/desktop/front/index.php?eventid=XXXXX"
+   - Racetimer: "racetimer.se"
+   - NEVER return an aggregate calendar page (one with sportIds= or organizationId= and no specific event ID)
+   - If the race date is in the future, the results page may not exist yet — return null in that case
 
 STRATEGY:
 - Visit the source URL first. Look for links to the race's own website.
 - Visit the official website. Look for dates, medal info, photos.
 - MEDAL DETECTION for Norwegian races: Look for menu items or links containing "Premiering", "Medalje", "Medaljer", "Premier". If you find such a link, the race gives medals — report medal_status as "confirmed". You don't need to click into it.
-- COVER PHOTO: Check the og:image first. If it's a real photo (not a logo), use it. Also check hero/banner images on the page.
-- If no good photo found on the site, search for one — most well-known races have great photos available.
+- COVER PHOTO: Check the og:image first. Only use it if it clearly shows RUNNERS (humans in athletic gear running). If it's a logo, graphic, or empty landscape — ignore it and search for a better one.
+- ALWAYS use search_images if the og:image is not a runner photo. Most races have amazing crowd shots available.
+- For search queries, include terms like "runners", "crowd", "start", "finish line", "pack" plus the race name and city/landmark.
 - Be efficient: max 4 tool uses. Don't visit clearly irrelevant pages.
 
 ALWAYS call report_findings at the end with your results.`;
@@ -251,9 +262,9 @@ async function enrichOneWithAgent(
 					}
 				}),
 				search_images: tool({
-					description: 'Search the web for photos of the race. Use when the website has no good cover photo. Searches for actual race images showing runners/course.',
+					description: 'Search for REAL PHOTOS of runners at this race. Use this if the website og:image is a logo/graphic. Prefer queries that will return crowd shots of runners in action with landmarks visible.',
 					parameters: z.object({
-						query: z.string().describe('Image search query, e.g. "Paris Marathon runners Champs-Élysées"')
+						query: z.string().describe('Specific image search query, e.g. "Berlin Marathon runners Brandenburg Gate crowd 2025" — always include "runners" and a landmark')
 					}),
 					execute: async ({ query }) => {
 						onLog(`    🔍 searching images: "${query}"`);
@@ -268,9 +279,10 @@ async function enrichOneWithAgent(
 						websiteUrl: z.string().nullable().describe('Official race website (not aggregator)'),
 						raceDateIso: z.string().nullable().describe('Date as YYYY-MM-DD'),
 						medalStatus: z.enum(['confirmed', 'likely', 'unclear']),
-						imageUrl: z.string().nullable().describe('URL of a good cover photo showing runners/course/scenery'),
+						imageUrl: z.string().nullable().describe('URL of an AMAZING photo showing RUNNERS IN ACTION — crowd shots, packs of runners, start/finish lines with people. NEVER a logo or graphic.'),
 						registrationUrl: z.string().nullable().describe('Direct signup URL'),
-						reasoning: z.string().describe('Brief explanation of what you found and image quality assessment')
+						resultsUrl: z.string().nullable().describe('Timing results page URL — must be a SPECIFIC event page on a timing provider (eqtiming.com/event/XXX, ultimate.dk?eventid=XXX, etc.). NOT a generic schedule/calendar page.').optional(),
+						reasoning: z.string().describe('Brief explanation of findings. For image: describe what the photo shows (runners? crowd? landmark?).')
 					}),
 					execute: async (findings) => {
 						if (findings.websiteUrl) result.websiteUrl = findings.websiteUrl;
@@ -278,6 +290,7 @@ async function enrichOneWithAgent(
 						if (findings.medalStatus !== 'unclear') result.medalStatus = findings.medalStatus;
 						if (findings.imageUrl) result.imageUrl = findings.imageUrl;
 						if (findings.registrationUrl) result.registrationUrl = findings.registrationUrl;
+						if (findings.resultsUrl) result.resultsUrl = findings.resultsUrl;
 						onLog(`    📋 ${findings.reasoning}`);
 						return { recorded: true };
 					}
@@ -318,6 +331,7 @@ export async function enrichRaces(
 
 		if (data.raceDate && !race.raceDate) race.raceDate = new Date(data.raceDate);
 		if (data.registrationUrl && !race.registrationUrl) race.registrationUrl = data.registrationUrl;
+		if (data.resultsUrl && !race.resultsUrl) race.resultsUrl = data.resultsUrl;
 		if (data.websiteUrl) race.websiteUrl = data.websiteUrl;
 		if (data.imageUrl) race.imageUrl = data.imageUrl;
 		if (data.medalStatus && race.medalStatus !== 'confirmed') race.medalStatus = data.medalStatus;

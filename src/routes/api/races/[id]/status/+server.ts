@@ -6,7 +6,8 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 
 const schema = z.object({
-	status: z.enum(['interested', 'following', 'seen', 'skip']).nullable(),
+	status: z.enum(['interested', 'attending', 'following', 'seen', 'skip']).nullable(),
+	bibNumber: z.string().max(20).nullable().optional(),
 	notes: z.string().max(1000).optional()
 });
 
@@ -18,7 +19,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 	const parsed = schema.safeParse(body);
 	if (!parsed.success) error(400, 'Invalid status');
 
-	const { status, notes } = parsed.data;
+	const { status, bibNumber, notes } = parsed.data;
 	const userId = locals.user.id;
 	const raceId = params.id;
 
@@ -30,10 +31,10 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 	} else {
 		await db
 			.insert(raceUserStatus)
-			.values({ userId, raceId, status, notes, updatedAt: new Date() })
+			.values({ userId, raceId, status, bibNumber: bibNumber ?? null, notes, updatedAt: new Date() })
 			.onConflictDoUpdate({
 				target: [raceUserStatus.userId, raceUserStatus.raceId],
-				set: { status, notes, updatedAt: new Date() }
+				set: { status, bibNumber: bibNumber ?? null, notes, updatedAt: new Date() }
 			});
 	}
 

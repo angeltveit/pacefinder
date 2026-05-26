@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			myStatus: raceUserStatus.status,
 			interestedCount: sql<number>`(
 				select count(*) from race_user_status
-				where race_id = ${races.id} and status = 'interested'
+				where race_id = ${races.id} and status in ('interested', 'attending')
 			)`.as('interested_count'),
 			commentCount: sql<number>`(
 				select count(*) from comments
@@ -70,7 +70,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			if (!existing.raceDate && r.race.raceDate) existing.raceDate = r.race.raceDate.toISOString();
 			if (r.race.medalStatus === 'confirmed') existing.medalStatus = 'confirmed';
 			else if (r.race.medalStatus === 'likely' && existing.medalStatus !== 'confirmed') existing.medalStatus = 'likely';
-			if (r.myStatus === 'interested') existing.myStatus = 'interested';
+			if (r.myStatus === 'interested' || r.myStatus === 'attending') existing.myStatus = r.myStatus;
 		} else {
 			eventMap.set(key, {
 				eventName: key,

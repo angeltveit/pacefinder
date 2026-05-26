@@ -30,6 +30,7 @@ export const races = pgTable('races', {
 	raceDate: timestamp('race_date'),
 	registrationUrl: text('registration_url'),
 	websiteUrl: text('website_url'),
+	resultsUrl: text('results_url'),
 	imageUrl: text('image_url'),
 	sourceUrl: text('source_url'),
 	/** 'confirmed' | 'likely' | 'unclear' */
@@ -58,8 +59,9 @@ export const raceUserStatus = pgTable(
 		raceId: text('race_id')
 			.notNull()
 			.references(() => races.id, { onDelete: 'cascade' }),
-		/** 'interested' | 'following' | 'seen' | 'skip' */
+		/** 'interested' | 'attending' | 'following' | 'seen' | 'skip' */
 		status: text('status').notNull(),
+		bibNumber: text('bib_number'),
 		notes: text('notes'),
 		updatedAt: timestamp('updated_at').notNull().defaultNow()
 	},
@@ -147,4 +149,25 @@ export const notifications = pgTable('notifications', {
 	sentAt: timestamp('sent_at'),
 	payload: jsonb('payload'),
 	createdAt: timestamp('created_at').notNull().defaultNow()
+});
+
+// ─── Race results / leaderboard ───────────────────────────────────────────────
+
+export const raceResults = pgTable('race_results', {
+	id: text('id')
+		.primaryKey()
+		.$defaultFn(() => crypto.randomUUID()),
+	raceId: text('race_id')
+		.notNull()
+		.references(() => races.id, { onDelete: 'cascade' }),
+	position: integer('position'),
+	name: text('name').notNull(),
+	bibNumber: text('bib_number'),
+	finishTime: text('finish_time').notNull(),
+	/** Time in seconds for sorting */
+	finishTimeSeconds: real('finish_time_seconds'),
+	category: text('category'),
+	categoryPosition: integer('category_position'),
+	club: text('club'),
+	scrapedAt: timestamp('scraped_at').notNull().defaultNow()
 });

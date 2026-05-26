@@ -125,6 +125,7 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 		eventName: r.eventName ?? r.name,
 		raceDate: r.raceDateIso ? new Date(r.raceDateIso) : null,
 		websiteUrl: r.websiteUrl ?? null,
+		resultsUrl: null,
 		imageUrl: null,
 		rawLlmOutput: r,
 		fingerprint: fingerprint(r.name, r.city, r.raceDateIso)

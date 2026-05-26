@@ -1,32 +1,34 @@
 /**
- * One-off script: backfill images for races missing them using Tavily image search.
+ * Backfill/refresh images for races using Tavily image search.
  * Run with: npx tsx scripts/backfill-images.ts
+ * Add --force to refresh ALL images (not just missing ones).
  */
 import 'dotenv/config';
 import postgres from 'postgres';
 
 const DB_URL = process.env.DB_CONNECTION || 'postgresql://localhost:5432/race_lookup';
 const TAVILY_KEY = process.env.TAVILY_API_KEY;
+const FORCE = process.argv.includes('--force');
 
 const sql = postgres(DB_URL);
 
 const landmarks: Record<string, string> = {
-	'berlin': 'Brandenburg Gate',
-	'paris': 'Champs-Élysées Arc de Triomphe',
-	'new york': 'Central Park finish line',
-	'chicago': 'Grant Park skyline',
-	'london': 'Tower Bridge',
-	'tokyo': 'Shinjuku',
-	'boston': 'Boylston Street',
-	'valencia': 'City of Arts and Sciences',
-	'stockholm': 'Gamla Stan',
-	'copenhagen': 'waterfront',
-	'amsterdam': 'Amstel',
-	'oslo': 'City Hall Rådhusplassen',
-	'bergen': 'Bryggen wharf',
-	'trondheim': 'Nidarosdomen',
-	'tromsø': 'Arctic midnight sun',
-	'stavanger': 'Lysefjorden',
+	'berlin': 'Brandenburg Gate runners crowd',
+	'paris': 'Champs-Élysées runners pack',
+	'new york': 'Verrazzano Bridge start crowd',
+	'chicago': 'Grant Park runners skyline',
+	'london': 'Tower Bridge runners',
+	'tokyo': 'Shinjuku runners pack',
+	'boston': 'Boylston Street finish crowd',
+	'valencia': 'City of Arts runners',
+	'stockholm': 'runners Gamla Stan',
+	'copenhagen': 'runners waterfront pack',
+	'amsterdam': 'runners canals crowd',
+	'oslo': 'runners Rådhusplassen start',
+	'bergen': 'runners Bryggen crowd',
+	'trondheim': 'runners Nidarosdomen',
+	'tromsø': 'runners midnight sun crowd',
+	'stavanger': 'runners fjord crowd',
 };
 
 function buildQuery(name: string, city: string, distanceKm: number | null): string {
@@ -34,8 +36,8 @@ function buildQuery(name: string, city: string, distanceKm: number | null): stri
 	const km = distanceKm ?? 0;
 	const type = km >= 42 ? 'marathon' : km >= 21 ? 'half marathon' : 'running race';
 	const landmark = landmarks[city.toLowerCase()] ?? '';
-	if (landmark) return `${cleanName} ${type} runners ${landmark} photo`;
-	return `${cleanName} ${city} ${type} runners finish photo`;
+	if (landmark) return `${cleanName} ${type} ${landmark} photo`;
+	return `${cleanName} ${city} ${type} runners crowd start line photo`;
 }
 
 async function searchImages(query: string): Promise<string[]> {
@@ -58,8 +60,10 @@ async function searchImages(query: string): Promise<string[]> {
 }
 
 async function main() {
-	const rows = await sql`SELECT id, name, city, distance_km FROM races WHERE image_url IS NULL`;
-	console.log(`Found ${rows.length} races without images\n`);
+	const rows = FORCE
+		? await sql`SELECT id, name, city, distance_km FROM races`
+		: await sql`SELECT id, name, city, distance_km FROM races WHERE image_url IS NULL`;
+	console.log(`${FORCE ? 'Refreshing' : 'Backfilling'} images for ${rows.length} races\n`);
 
 	for (const row of rows) {
 		const query = buildQuery(row.name, row.city, row.distance_km);

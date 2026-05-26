@@ -10,6 +10,7 @@ import { eq, gte, and, isNull, sql } from 'drizzle-orm';
 import { classifyRaces } from './classifier';
 import { deduplicateRaces } from './dedup';
 import { enrichRaces } from './enrichment';
+import { scrapeRaceResults, searchAllTimingProviders } from './results';
 import { scrapeKondis } from './sources/kondis';
 import { scrapeFriidrett } from './sources/friidrett';
 import { searchTavily } from './sources/tavily';
@@ -126,6 +127,16 @@ export async function runAgent(
 		// ── Enrich: visit official pages for dates, medals, images ────────────
 		const enriched = await enrichRaces(deduped, onLog);
 
+		// ── Auto-discover results URLs on known timing providers ──────────────
+		const needsResultsUrl = enriched.filter(r => !r.resultsUrl);
+		if (needsResultsUrl.length > 0) {
+			onLog(`🔍 Searching timing providers for ${needsResultsUrl.length} races without results URL…`);
+			for (const race of needsResultsUrl) {
+				const url = await searchAllTimingProviders(race.name, race.raceDate, onLog);
+				if (url) race.resultsUrl = url;
+			}
+		}
+
 		// ── Upsert into DB ────────────────────────────────────────────────────
 		onLog('Saving races to database…');
 		let racesNew = 0;
@@ -152,6 +163,7 @@ export async function runAgent(
 					.set({
 						registrationStatus: race.registrationStatus,
 						registrationUrl: race.registrationUrl ?? existing.registrationUrl,
+						resultsUrl: race.resultsUrl ?? existing.resultsUrl,
 						medalStatus: race.medalStatus,
 						websiteUrl: race.websiteUrl ?? existing.websiteUrl,
 						imageUrl: race.imageUrl ?? existing.imageUrl,
@@ -178,6 +190,10 @@ export async function runAgent(
 				)
 			)
 		`);
+
+		// ── Scrape results for completed races ────────────────────────────────
+		const { scraped: resultsScraped } = await scrapeRaceResults(onLog);
+		if (resultsScraped > 0) onLog(`📊 Scraped results for ${resultsScraped} completed races`);
 
 		// ── Finalize run record ───────────────────────────────────────────────
 		await db

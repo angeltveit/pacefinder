@@ -1,5 +1,5 @@
 import { db } from '$lib/server/db';
-import { races, agentRuns, user, comments, settings } from '$lib/server/db/schema';
+import { raceSeries, raceEditions, raceDistances, agentRuns, user, comments, settings } from '$lib/server/db/schema';
 import { desc, eq, sql, gt, gte, and, isNull } from 'drizzle-orm';
 import { getHash, getStat, pingRedis, KEYS } from '$lib/server/redis';
 import { env } from '$env/dynamic/private';
@@ -26,33 +26,36 @@ export const load: PageServerLoad = async () => {
 	] = await Promise.all([
 		db.select({ count: sql<number>`count(*)` }).from(user),
 		db.select({ count: sql<number>`count(*)` }).from(user).where(gt(user.createdAt, yesterday)),
-		db.select({ count: sql<number>`count(*)` }).from(races),
+		db.select({ count: sql<number>`count(*)` }).from(raceDistances),
 		db
 			.select({ count: sql<number>`count(*)` })
-			.from(races)
-			.where(gt(races.raceDate, now)),
+			.from(raceEditions)
+			.where(gt(raceEditions.raceDate, now)),
 		db
 			.select({ count: sql<number>`count(*)` })
-			.from(races)
-			.where(gt(races.firstSeenAt, yesterday)),
+			.from(raceDistances)
+			.where(gt(raceDistances.firstSeenAt, yesterday)),
 		db.select({ count: sql<number>`count(*)` }).from(comments).where(sql`deleted_at is null`),
 		db.select().from(agentRuns).orderBy(desc(agentRuns.startedAt)).limit(10),
 		db
 			.select({
-				id: races.id,
-				name: races.name,
-				count: sql<number>`(select count(*) from race_user_status where race_id = ${races.id} and status = 'interested')`
+				id: raceEditions.id,
+				name: raceSeries.name,
+				count: sql<number>`(select count(*) from race_user_status where edition_id = ${raceEditions.id} and status = 'interested')`
 			})
-			.from(races)
+			.from(raceEditions)
+			.innerJoin(raceSeries, eq(raceEditions.seriesId, raceSeries.id))
 			.orderBy(sql`count desc`)
 			.limit(5),
 		db
 			.select({
-				id: races.id,
-				name: races.name,
-				count: sql<number>`(select count(*) from comments where race_id = ${races.id} and deleted_at is null)`
+				id: raceDistances.id,
+				name: sql<string>`${raceSeries.name} || ' – ' || ${raceDistances.name}`,
+				count: sql<number>`(select count(*) from comments where distance_id = ${raceDistances.id} and deleted_at is null)`
 			})
-			.from(races)
+			.from(raceDistances)
+			.innerJoin(raceEditions, eq(raceDistances.editionId, raceEditions.id))
+			.innerJoin(raceSeries, eq(raceEditions.seriesId, raceSeries.id))
 			.orderBy(sql`count desc`)
 			.limit(5),
 		db

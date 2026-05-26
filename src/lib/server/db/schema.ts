@@ -8,42 +8,101 @@ import {
 	integer,
 	unique
 } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
 import { user } from './auth.schema';
 
 export * from './auth.schema';
 
-// ─── Races ────────────────────────────────────────────────────────────────────
+// ─── Race Series ──────────────────────────────────────────────────────────────
+// The recurring brand/concept, e.g. "Bergen City Marathon" or "Vinløpet"
 
-export const races = pgTable('races', {
+export const raceSeries = pgTable('race_series', {
 	id: text('id')
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
+	/** Clean event name without year or distance, e.g. "Bergen City Marathon" */
 	name: text('name').notNull(),
-	/** Base event name without distance suffix (e.g. "Bergen City Marathon") */
-	eventName: text('event_name'),
 	/** 'local' | 'norway' | 'international' */
 	category: text('category').notNull(),
-	distanceKm: real('distance_km'),
-	location: text('location'),
 	city: text('city').notNull(),
 	country: text('country').notNull().default('NO'),
-	raceDate: timestamp('race_date'),
-	registrationUrl: text('registration_url'),
+	/** Series-level website (may be overridden per edition) */
 	websiteUrl: text('website_url'),
-	resultsUrl: text('results_url'),
 	imageUrl: text('image_url'),
-	sourceUrl: text('source_url'),
-	/** 'confirmed' | 'likely' | 'unclear' */
-	medalStatus: text('medal_status').notNull().default('unclear'),
-	/** 'open' | 'opening_soon' | 'unknown' | 'closed' */
-	registrationStatus: text('registration_status').notNull().default('unknown'),
 	whyItFits: text('why_it_fits'),
-	rawLlmOutput: jsonb('raw_llm_output'),
-	/** Deduplication key: slugified name+date+city */
-	fingerprint: text('fingerprint').notNull().unique(),
+	/** Deduplication key: slugified name+city */
+	seriesFingerprint: text('series_fingerprint').notNull().unique(),
 	firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
 	lastUpdatedAt: timestamp('last_updated_at').notNull().defaultNow()
 });
+
+// ─── Race Editions ────────────────────────────────────────────────────────────
+// A specific occurrence/year, e.g. "Bergen City Marathon 2026"
+
+export const raceEditions = pgTable('race_editions', {
+	id: text('id')
+		.primaryKey()
+		.$defaultFn(() => crypto.randomUUID()),
+	seriesId: text('series_id')
+		.notNull()
+		.references(() => raceSeries.id, { onDelete: 'cascade' }),
+	year: integer('year'),
+	raceDate: timestamp('race_date'),
+	location: text('location'),
+	/** 'open' | 'opening_soon' | 'unknown' | 'closed' */
+	registrationStatus: text('registration_status').notNull().default('unknown'),
+	/** Edition-specific website URL (overrides series websiteUrl when set) */
+	websiteUrl: text('website_url'),
+	sourceUrl: text('source_url'),
+	rawLlmOutput: jsonb('raw_llm_output'),
+	/** Deduplication key: slugified eventName+city+year */
+	editionFingerprint: text('edition_fingerprint').notNull().unique(),
+	firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
+	lastUpdatedAt: timestamp('last_updated_at').notNull().defaultNow()
+});
+
+// ─── Race Distances ───────────────────────────────────────────────────────────
+// A registerable option within an edition: 5K, Half Marathon, Marathon, etc.
+// IDs are preserved from the old races table for URL stability.
+
+export const raceDistances = pgTable('race_distances', {
+	id: text('id')
+		.primaryKey()
+		.$defaultFn(() => crypto.randomUUID()),
+	editionId: text('edition_id')
+		.notNull()
+		.references(() => raceEditions.id, { onDelete: 'cascade' }),
+	/** Full name including distance suffix, e.g. "Bergen City Marathon – 10K" */
+	name: text('name').notNull(),
+	distanceKm: real('distance_km'),
+	registrationUrl: text('registration_url'),
+	resultsUrl: text('results_url'),
+	/** 'confirmed' | 'likely' | 'unclear' */
+	medalStatus: text('medal_status').notNull().default('unclear'),
+	firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
+	lastUpdatedAt: timestamp('last_updated_at').notNull().defaultNow()
+});
+
+// ─── Relations ────────────────────────────────────────────────────────────────
+
+export const raceSeriesRelations = relations(raceSeries, ({ many }) => ({
+	editions: many(raceEditions)
+}));
+
+export const raceEditionsRelations = relations(raceEditions, ({ one, many }) => ({
+	series: one(raceSeries, { fields: [raceEditions.seriesId], references: [raceSeries.id] }),
+	distances: many(raceDistances)
+}));
+
+export const raceDistancesRelations = relations(raceDistances, ({ one, many }) => ({
+	edition: one(raceEditions, { fields: [raceDistances.editionId], references: [raceEditions.id] }),
+	commentsList: many(comments),
+	results: many(raceResults)
+}));
+
+export const raceEditionsRelationsExtra = relations(raceEditions, ({ many }) => ({
+	userStatuses: many(raceUserStatus)
+}));
 
 // ─── Per-user triage ──────────────────────────────────────────────────────────
 
@@ -56,16 +115,17 @@ export const raceUserStatus = pgTable(
 		userId: text('user_id')
 			.notNull()
 			.references(() => user.id, { onDelete: 'cascade' }),
-		raceId: text('race_id')
+		/** References race_editions.id — one status row per user per edition */
+		editionId: text('edition_id')
 			.notNull()
-			.references(() => races.id, { onDelete: 'cascade' }),
+			.references(() => raceEditions.id, { onDelete: 'cascade' }),
 		/** 'interested' | 'attending' | 'following' | 'seen' | 'skip' */
 		status: text('status').notNull(),
 		bibNumber: text('bib_number'),
 		notes: text('notes'),
 		updatedAt: timestamp('updated_at').notNull().defaultNow()
 	},
-	(t) => [unique().on(t.userId, t.raceId)]
+	(t) => [unique().on(t.userId, t.editionId)]
 );
 
 // ─── Comments ─────────────────────────────────────────────────────────────────
@@ -74,9 +134,10 @@ export const comments = pgTable('comments', {
 	id: text('id')
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
-	raceId: text('race_id')
+	/** References race_distances.id */
+	distanceId: text('distance_id')
 		.notNull()
-		.references(() => races.id, { onDelete: 'cascade' }),
+		.references(() => raceDistances.id, { onDelete: 'cascade' }),
 	userId: text('user_id')
 		.notNull()
 		.references(() => user.id, { onDelete: 'cascade' }),
@@ -144,7 +205,8 @@ export const notifications = pgTable('notifications', {
 	userId: text('user_id')
 		.notNull()
 		.references(() => user.id, { onDelete: 'cascade' }),
-	raceId: text('race_id').references(() => races.id, { onDelete: 'cascade' }),
+	/** Optional: pin notification to a specific distance */
+	distanceId: text('distance_id').references(() => raceDistances.id, { onDelete: 'cascade' }),
 	type: text('type').notNull(),
 	sentAt: timestamp('sent_at'),
 	payload: jsonb('payload'),
@@ -157,9 +219,10 @@ export const raceResults = pgTable('race_results', {
 	id: text('id')
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID()),
-	raceId: text('race_id')
+	/** References race_distances.id */
+	distanceId: text('distance_id')
 		.notNull()
-		.references(() => races.id, { onDelete: 'cascade' }),
+		.references(() => raceDistances.id, { onDelete: 'cascade' }),
 	position: integer('position'),
 	name: text('name').notNull(),
 	bibNumber: text('bib_number'),

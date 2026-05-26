@@ -18,6 +18,7 @@ interface EnrichmentResult {
 	websiteUrl?: string;
 	imageUrl?: string;
 	medalStatus?: 'confirmed' | 'likely' | 'unclear';
+	distancesKm?: number[];
 }
 
 // ── LLM setup ────────────────────────────────────────────────────────────────
@@ -184,7 +185,8 @@ const ENRICHMENT_SYSTEM = `You are a web research agent finding detailed informa
 GOALS (in priority order):
 1. Find the race's OFFICIAL WEBSITE (not kondis.no, friidrett.no, trainerday.com, or any aggregator)
 2. Find the exact DATE (YYYY-MM-DD format)
-3. Determine if the race gives a FINISHER MEDAL
+3. Find ALL DISTANCES offered — e.g. [5, 10] for a race with both 5km and 10km. Report every distance you see on the page.
+4. Determine if the race gives a FINISHER MEDAL
 4. Find an AMAZING COVER PHOTO — this is the MOST VISIBLE element of the app:
    - PRIORITY 1: RUNNERS IN ACTION — a crowd of runners on the course, sweat, motion, legs pumping
    - PRIORITY 2: COLORFUL & VIBRANT — bright race bibs, confetti, autumn leaves, sunrise/sunset lighting, blue sky
@@ -282,6 +284,7 @@ async function enrichOneWithAgent(
 						imageUrl: z.string().nullable().describe('URL of an AMAZING photo showing RUNNERS IN ACTION — crowd shots, packs of runners, start/finish lines with people. NEVER a logo or graphic.'),
 						registrationUrl: z.string().nullable().describe('Direct signup URL'),
 						resultsUrl: z.string().nullable().describe('Timing results page URL — must be a SPECIFIC event page on a timing provider (eqtiming.com/event/XXX, ultimate.dk?eventid=XXX, etc.). NOT a generic schedule/calendar page.').optional(),
+						distancesKm: z.array(z.number()).nullable().optional().describe('ALL distances offered at this event in km, e.g. [5, 10] for a race with both 5km and 10km. Only set if you found explicit distance info on the page.'),
 						reasoning: z.string().describe('Brief explanation of findings. For image: describe what the photo shows (runners? crowd? landmark?).')
 					}),
 					execute: async (findings) => {
@@ -291,6 +294,7 @@ async function enrichOneWithAgent(
 						if (findings.imageUrl) result.imageUrl = findings.imageUrl;
 						if (findings.registrationUrl) result.registrationUrl = findings.registrationUrl;
 						if (findings.resultsUrl) result.resultsUrl = findings.resultsUrl;
+						if (findings.distancesKm && findings.distancesKm.length > 0) result.distancesKm = findings.distancesKm;
 						onLog(`    📋 ${findings.reasoning}`);
 						return { recorded: true };
 					}
@@ -335,6 +339,7 @@ export async function enrichRaces(
 		if (data.websiteUrl) race.websiteUrl = data.websiteUrl;
 		if (data.imageUrl) race.imageUrl = data.imageUrl;
 		if (data.medalStatus && race.medalStatus !== 'confirmed') race.medalStatus = data.medalStatus;
+		if (data.distancesKm && data.distancesKm.length > 1) race.enrichedDistancesKm = data.distancesKm;
 	}
 
 	// ── Fast image fallback: for any race the agent missed, just search directly ──

@@ -1,9 +1,105 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import { db } from '$lib/server/db';
-import { races } from '$lib/server/db/schema';
-import { eq } from 'drizzle-orm';
+import { raceSeries, raceEditions, raceDistances } from '$lib/server/db/schema';
+import { eq, sql } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
+
+export const DELETE: RequestHandler = async ({ params, locals }) => {
+	if (!locals.user || locals.user.role !== 'admin') error(403, 'Admin only');
+
+	const deleted = await db
+		.delete(raceDistances)
+		.where(eq(raceDistances.id, params.id))
+		.returning({ id: raceDistances.id });
+	if (deleted.length === 0) error(404, 'Race not found');
+
+	// Cascade-clean empty editions / series
+	await db.execute(sql`
+		DELETE FROM race_editions WHERE id NOT IN (SELECT edition_id FROM race_distances)
+	`);
+	await db.execute(sql`
+		DELETE FROM race_series WHERE id NOT IN (SELECT series_id FROM race_editions)
+	`);
+
+	return json({ ok: true });
+};
+
+const patchSchema = z.object({
+	name: z.string().min(1).optional(),
+	distanceKm: z.number().nullable().optional(),
+	registrationUrl: z.string().url().nullable().optional().or(z.literal('')),
+	resultsUrl: z.string().url().nullable().optional().or(z.literal('')),
+	medalStatus: z.enum(['confirmed', 'likely', 'unclear']).optional(),
+	// Edition-level fields
+	raceDate: z.string().nullable().optional(),
+	registrationStatus: z.enum(['open', 'opening_soon', 'closed', 'unknown']).optional(),
+	websiteUrl: z.string().url().nullable().optional().or(z.literal('')),
+	// Series-level fields
+	category: z.enum(['local', 'norway', 'international']).optional(),
+	city: z.string().min(1).optional(),
+	imageUrl: z.string().url().nullable().optional().or(z.literal('')),
+	whyItFits: z.string().nullable().optional()
+});
+
+export const PATCH: RequestHandler = async ({ params, locals, request }) => {
+	if (!locals.user || locals.user.role !== 'admin') error(403, 'Admin only');
+
+	const body = await request.json().catch(() => null);
+	const parsed = patchSchema.safeParse(body);
+	if (!parsed.success) error(400, parsed.error.message);
+
+	const data = parsed.data;
+
+	// Find the distance and its edition+series IDs
+	const rows = await db
+		.select({
+			editionId: raceDistances.editionId,
+			seriesId: raceEditions.seriesId
+		})
+		.from(raceDistances)
+		.innerJoin(raceEditions, eq(raceDistances.editionId, raceEditions.id))
+		.where(eq(raceDistances.id, params.id))
+		.limit(1);
+
+	if (rows.length === 0) error(404, 'Race not found');
+	const { editionId, seriesId } = rows[0];
+
+	const now = new Date();
+
+	// Update race_distances
+	const distUpdates: Record<string, unknown> = { lastUpdatedAt: now };
+	if (data.name !== undefined) distUpdates.name = data.name;
+	if (data.distanceKm !== undefined) distUpdates.distanceKm = data.distanceKm;
+	if (data.registrationUrl !== undefined) distUpdates.registrationUrl = data.registrationUrl || null;
+	if (data.resultsUrl !== undefined) distUpdates.resultsUrl = data.resultsUrl || null;
+	if (data.medalStatus !== undefined) distUpdates.medalStatus = data.medalStatus;
+	if (Object.keys(distUpdates).length > 1) {
+		await db.update(raceDistances).set(distUpdates).where(eq(raceDistances.id, params.id));
+	}
+
+	// Update race_editions
+	const editUpdates: Record<string, unknown> = { lastUpdatedAt: now };
+	if (data.raceDate !== undefined) editUpdates.raceDate = data.raceDate ? new Date(data.raceDate) : null;
+	if (data.registrationStatus !== undefined) editUpdates.registrationStatus = data.registrationStatus;
+	if (data.websiteUrl !== undefined) editUpdates.websiteUrl = data.websiteUrl || null;
+	if (Object.keys(editUpdates).length > 1) {
+		await db.update(raceEditions).set(editUpdates).where(eq(raceEditions.id, editionId));
+	}
+
+	// Update race_series
+	const seriesUpdates: Record<string, unknown> = { lastUpdatedAt: now };
+	if (data.category !== undefined) seriesUpdates.category = data.category;
+	if (data.city !== undefined) seriesUpdates.city = data.city;
+	if (data.imageUrl !== undefined) seriesUpdates.imageUrl = data.imageUrl || null;
+	if (data.whyItFits !== undefined) seriesUpdates.whyItFits = data.whyItFits || null;
+	if (Object.keys(seriesUpdates).length > 1) {
+		await db.update(raceSeries).set(seriesUpdates).where(eq(raceSeries.id, seriesId));
+	}
+
+	return json({ ok: true });
+};
+
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user || locals.user.role !== 'admin') error(403, 'Admin only');

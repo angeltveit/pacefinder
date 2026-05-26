@@ -3,10 +3,19 @@
  * Called by POST /api/agent/run (protected by AGENT_SECRET).
  */
 import { db } from '$lib/server/db';
-import { agentRuns, races, settings, notifications, user } from '$lib/server/db/schema';
+import {
+	agentRuns,
+	raceSeries,
+	raceEditions,
+	raceDistances,
+	settings,
+	notifications,
+	user
+} from '$lib/server/db/schema';
 import { incrStat, setHash, KEYS } from '$lib/server/redis';
 import { env } from '$env/dynamic/private';
 import { eq, gte, and, isNull, sql } from 'drizzle-orm';
+import type { ClassifiedRace } from './types';
 import { classifyRaces } from './classifier';
 import { deduplicateRaces } from './dedup';
 import { enrichRaces } from './enrichment';
@@ -16,7 +25,165 @@ import { scrapeFriidrett } from './sources/friidrett';
 import { searchTavily } from './sources/tavily';
 import { searchGoogle } from './sources/google';
 import { scrapeSocial } from './sources/social';
+import { scrapeEqTiming } from './sources/eqtiming';
 import type { RawRaceLead } from './types';
+
+// ---------------------------------------------------------------------------
+// Fingerprint helpers
+// ---------------------------------------------------------------------------
+
+function slugify(s: string): string {
+	return s
+		.toLowerCase()
+		.replace(/[æ]/g, 'ae')
+		.replace(/[ø]/g, 'oe')
+		.replace(/[å]/g, 'aa')
+		.replace(/[^a-z0-9|]/g, '-')
+		.replace(/-+/g, '-')
+		.replace(/^-|-$/g, '');
+}
+
+function makeSeriesFingerprint(eventName: string, city: string): string {
+	return slugify(`${eventName}|${city}`);
+}
+
+function makeEditionFingerprint(eventName: string, city: string, year: number | null): string {
+	return slugify(`${eventName}|${city}|${year ?? 'nodate'}`);
+}
+
+// ---------------------------------------------------------------------------
+// Shared 3-level upsert — also exported for use in admin scrape-url endpoint
+// ---------------------------------------------------------------------------
+
+export async function upsertClassifiedRace(
+	race: ClassifiedRace,
+	onLog: (msg: string) => void = () => {}
+): Promise<{ isNew: boolean }> {
+	const eventName = race.eventName ?? race.name;
+	const year = race.raceDate ? race.raceDate.getFullYear() : null;
+	const sf = makeSeriesFingerprint(eventName, race.city);
+	const ef = makeEditionFingerprint(eventName, race.city, year);
+
+	// ── 1. Upsert series ────────────────────────────────────────────────
+
+	const existingSeries = await db.query.raceSeries.findFirst({
+		where: eq(raceSeries.seriesFingerprint, sf)
+	});
+
+	let seriesId: string;
+	if (!existingSeries) {
+		const [inserted] = await db
+			.insert(raceSeries)
+			.values({
+				name: eventName,
+				category: race.category,
+				city: race.city,
+				country: race.country,
+				websiteUrl: race.websiteUrl,
+				imageUrl: race.imageUrl,
+				whyItFits: race.whyItFits,
+				seriesFingerprint: sf
+			})
+			.returning({ id: raceSeries.id });
+		seriesId = inserted.id;
+	} else {
+		seriesId = existingSeries.id;
+		await db
+			.update(raceSeries)
+			.set({
+				websiteUrl: race.websiteUrl ?? existingSeries.websiteUrl,
+				imageUrl: race.imageUrl ?? existingSeries.imageUrl,
+				whyItFits: race.whyItFits || existingSeries.whyItFits,
+				lastUpdatedAt: new Date()
+			})
+			.where(eq(raceSeries.id, seriesId));
+	}
+
+	// ── 2. Upsert edition ────────────────────────────────────────────────
+
+	const existingEdition = await db.query.raceEditions.findFirst({
+		where: eq(raceEditions.editionFingerprint, ef)
+	});
+
+	let editionId: string;
+	if (!existingEdition) {
+		const [inserted] = await db
+			.insert(raceEditions)
+			.values({
+				seriesId,
+				year,
+				raceDate: race.raceDate,
+				location: race.location,
+				registrationStatus: race.registrationStatus,
+				websiteUrl: race.websiteUrl,
+				sourceUrl: race.sourceUrl,
+				rawLlmOutput: race.rawLlmOutput,
+				editionFingerprint: ef
+			})
+			.returning({ id: raceEditions.id });
+		editionId = inserted.id;
+	} else {
+		editionId = existingEdition.id;
+		await db
+			.update(raceEditions)
+			.set({
+				registrationStatus: race.registrationStatus,
+				raceDate: race.raceDate ?? existingEdition.raceDate,
+				websiteUrl: race.websiteUrl ?? existingEdition.websiteUrl,
+				sourceUrl: race.sourceUrl ?? existingEdition.sourceUrl,
+				lastUpdatedAt: new Date()
+			})
+			.where(eq(raceEditions.id, editionId));
+	}
+
+	// ── 3. Upsert distance(s) ─────────────────────────────────────────────
+	// If enrichment found multiple distances (e.g. [5, 10]), create one row per distance.
+	// Otherwise fall back to the single distanceKm from classification.
+
+	const distancesToUpsert: Array<{ km: number | null; name: string }> =
+		race.enrichedDistancesKm && race.enrichedDistancesKm.length > 1
+			? race.enrichedDistancesKm
+					.sort((a, b) => a - b)
+					.map((km) => ({ km, name: `${eventName} – ${km}km` }))
+			: [{ km: race.distanceKm, name: race.name }];
+
+	let anyNew = false;
+	for (const { km, name } of distancesToUpsert) {
+		const existingDist = await db.query.raceDistances.findFirst({
+			where: and(
+				eq(raceDistances.editionId, editionId),
+				km !== null
+					? eq(raceDistances.distanceKm, km)
+					: isNull(raceDistances.distanceKm)
+			)
+		});
+
+		if (!existingDist) {
+			await db.insert(raceDistances).values({
+				editionId,
+				name,
+				distanceKm: km,
+				registrationUrl: race.registrationUrl,
+				resultsUrl: race.resultsUrl,
+				medalStatus: race.medalStatus
+			});
+			onLog(`  + new: ${name} (${race.city})`);
+			anyNew = true;
+		} else {
+			await db
+				.update(raceDistances)
+				.set({
+					registrationUrl: race.registrationUrl ?? existingDist.registrationUrl,
+					resultsUrl: race.resultsUrl ?? existingDist.resultsUrl,
+					medalStatus: race.medalStatus,
+					lastUpdatedAt: new Date()
+				})
+				.where(eq(raceDistances.id, existingDist.id));
+		}
+	}
+
+	return { isNew: anyNew };
+}
 
 async function checkMonthlyBudget(onLog: (msg: string) => void): Promise<void> {
 	onLog('Checking monthly budget…');
@@ -102,6 +269,7 @@ export async function runAgent(
 		const results = await Promise.allSettled([
 			scrapeKondis().then((r) => { sourcesUsed.push('kondis'); onLog(`kondis: ${r.length} leads`); return r; }),
 			scrapeFriidrett().then((r) => { sourcesUsed.push('friidrett'); onLog(`friidrett: ${r.length} leads`); return r; }),
+			scrapeEqTiming().then((r) => { sourcesUsed.push('eqtiming'); onLog(`eqtiming: ${r.length} leads`); return r; }),
 			searchTavily().then((r) => { sourcesUsed.push('tavily'); onLog(`tavily: ${r.length} leads`); return r; }),
 			searchGoogle().then((r) => { sourcesUsed.push('google'); if (r.length) onLog(`google: ${r.length} leads`); return r; }),
 			scrapeSocial().then((r) => { sourcesUsed.push('social'); if (r.length) onLog(`social: ${r.length} leads`); return r; })
@@ -124,10 +292,31 @@ export async function runAgent(
 		// ── Deduplicate: LLM identifies same races with different names ───────
 		const deduped = await deduplicateRaces(classified, onLog);
 
-		// ── Enrich: visit official pages for dates, medals, images ────────────
-		const enriched = await enrichRaces(deduped, onLog);
+		// ── Split into new vs known races to avoid re-enriching what we have ──
+		const knownFingerprints = new Set(
+			(await db.select({ fp: raceEditions.editionFingerprint }).from(raceEditions))
+				.map((r) => r.fp)
+		);
 
-		// ── Auto-discover results URLs on known timing providers ──────────────
+		const newRaces: typeof deduped = [];
+		const knownRaces: typeof deduped = [];
+		for (const race of deduped) {
+			const eventName = race.eventName ?? race.name;
+			const year = race.raceDate ? race.raceDate.getFullYear() : null;
+			const ef = makeEditionFingerprint(eventName, race.city, year);
+			if (knownFingerprints.has(ef)) {
+				knownRaces.push(race);
+			} else {
+				newRaces.push(race);
+			}
+		}
+		if (knownRaces.length > 0) onLog(`⚡ ${knownRaces.length} known races — skipping enrichment, updating status only`);
+		if (newRaces.length > 0) onLog(`✨ ${newRaces.length} new races — running full enrichment`);
+
+		// ── Enrich new races only (visit official pages for dates, medals, images)
+		const enriched = newRaces.length > 0 ? await enrichRaces(newRaces, onLog) : [];
+
+		// ── Auto-discover results URLs for new races only ─────────────────────
 		const needsResultsUrl = enriched.filter(r => !r.resultsUrl);
 		if (needsResultsUrl.length > 0) {
 			onLog(`🔍 Searching timing providers for ${needsResultsUrl.length} races without results URL…`);
@@ -137,57 +326,34 @@ export async function runAgent(
 			}
 		}
 
+		// Known races go straight to upsert (registration status update only)
+		const allToUpsert = [...enriched, ...knownRaces];
+
 		// ── Upsert into DB ────────────────────────────────────────────────────
 		onLog('Saving races to database…');
 		let racesNew = 0;
 		let racesUpdated = 0;
 
-		for (const race of enriched) {
-			const existing = await db.query.races.findFirst({
-				where: eq(races.fingerprint, race.fingerprint)
-			});
-
-			if (!existing) {
-				await db.insert(races).values(race);
+		for (const race of allToUpsert) {
+			const { isNew } = await upsertClassifiedRace(race, onLog);
+			if (isNew) {
 				racesNew++;
-				onLog(`  + new: ${race.name} (${race.city})`);
 				await incrStat(KEYS.RACES_TOTAL);
 				await incrStat(KEYS.RACES_NEW_24H);
 				if (race.raceDate && new Date(race.raceDate) > new Date()) {
 					await incrStat(KEYS.RACES_UPCOMING);
 				}
 			} else {
-				// Only update fields that may have changed
-				await db
-					.update(races)
-					.set({
-						registrationStatus: race.registrationStatus,
-						registrationUrl: race.registrationUrl ?? existing.registrationUrl,
-						resultsUrl: race.resultsUrl ?? existing.resultsUrl,
-						medalStatus: race.medalStatus,
-						websiteUrl: race.websiteUrl ?? existing.websiteUrl,
-						imageUrl: race.imageUrl ?? existing.imageUrl,
-						raceDate: race.raceDate ?? existing.raceDate,
-						eventName: race.eventName ?? existing.eventName,
-						lastUpdatedAt: new Date()
-					})
-					.where(eq(races.fingerprint, race.fingerprint));
 				racesUpdated++;
 			}
 		}
 
-		// ── Propagate medal confirmations across distances of same event ──────
+		// ── Propagate medal confirmations across distances of same edition ────
 		await db.execute(sql`
-			UPDATE races SET medal_status = 'confirmed', last_updated_at = now()
+			UPDATE race_distances SET medal_status = 'confirmed', last_updated_at = now()
 			WHERE medal_status != 'confirmed'
-			AND (
-				website_url IN (SELECT website_url FROM races WHERE medal_status = 'confirmed' AND website_url IS NOT NULL)
-				OR source_url IN (SELECT source_url FROM races WHERE medal_status = 'confirmed')
-				OR EXISTS (
-					SELECT 1 FROM races r2
-					WHERE r2.medal_status = 'confirmed' AND r2.id != races.id
-					AND split_part(races.name, ' – ', 1) = split_part(r2.name, ' – ', 1)
-				)
+			AND edition_id IN (
+				SELECT edition_id FROM race_distances WHERE medal_status = 'confirmed'
 			)
 		`);
 

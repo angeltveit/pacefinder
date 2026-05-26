@@ -16,7 +16,7 @@ import { z } from 'zod';
 import * as cheerio from 'cheerio';
 import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
-import { races, raceResults } from '$lib/server/db/schema';
+import { raceSeries, raceEditions, raceDistances, raceResults } from '$lib/server/db/schema';
 import { eq, and, isNull, lte, sql } from 'drizzle-orm';
 
 function getModel() {
@@ -131,7 +131,7 @@ export async function findEqTimingEvent(
 
 	// Normalize race name for matching
 	const normalize = (s: string) => s.toLowerCase()
-		.replace(/\d{4}/g, '') // strip year
+		.replace(/\b20\d{2}\b/g, '') // strip years only (2000-2099), NOT event ID prefixes like "4625"
 		.replace(/[–—-]\s*(5k|10k|half|halvmarathon|marathon|[\d.]+\s*km).*$/i, '') // strip distance suffix
 		.replace(/[^a-zæøå0-9]/gi, '') // only letters/numbers
 		.trim();
@@ -148,8 +148,8 @@ export async function findEqTimingEvent(
 
 	if (matches.length === 0) {
 		// Try fuzzy: any event containing the first significant word of the race name
-		const words = raceName.toLowerCase().replace(/\d{4}/, '').trim().split(/\s+/)
-			.filter(w => w.length > 3 && !/rundt|løp|run|race|marathon|half/i.test(w));
+		const words = raceName.toLowerCase().replace(/\b20\d{2}\b/, '').trim().split(/\s+/)
+			.filter(w => w.length > 4 && !/rundt|løpet|lopet|løp|löp|run|race|marathon|half/i.test(w));
 		if (words.length > 0) {
 			const keyword = words[0];
 			const fuzzy = eqTimingEventsCache!.filter(e => {
@@ -499,20 +499,39 @@ Rules:
 
 // ── Main export: find and scrape results for completed races ─────────────────
 
+// Shape expected by findAndParseResults (flattened from 3 tables)
+interface RaceForResults {
+	id: string;
+	name: string;
+	distanceKm: number | null;
+	raceDate: Date | null;
+	resultsUrl: string | null;
+	websiteUrl: string | null;
+}
+
 export async function scrapeRaceResults(
 	onLog: (msg: string) => void
 ): Promise<{ scraped: number; failed: number }> {
-	// Find races that: have a date in the past, and don't have results yet
+	// Find distances whose edition date is in the past and have no results yet
 	const pastRaces = await db
-		.select()
-		.from(races)
+		.select({
+			id: raceDistances.id,
+			name: raceDistances.name,
+			distanceKm: raceDistances.distanceKm,
+			raceDate: raceEditions.raceDate,
+			resultsUrl: raceDistances.resultsUrl,
+			websiteUrl: sql<string | null>`coalesce(${raceEditions.websiteUrl}, ${raceSeries.websiteUrl})`
+		})
+		.from(raceDistances)
+		.innerJoin(raceEditions, eq(raceDistances.editionId, raceEditions.id))
+		.innerJoin(raceSeries, eq(raceEditions.seriesId, raceSeries.id))
 		.where(
 			and(
-				lte(races.raceDate, new Date()),
-				sql`NOT EXISTS (SELECT 1 FROM race_results WHERE race_id = ${races.id} LIMIT 1)`
+				lte(raceEditions.raceDate, new Date()),
+				sql`NOT EXISTS (SELECT 1 FROM race_results WHERE distance_id = ${raceDistances.id} LIMIT 1)`
 			)
 		)
-		.limit(5); // Process max 5 per run to stay within rate limits
+		.limit(5);
 
 	if (pastRaces.length === 0) {
 		onLog('No completed races without results found');
@@ -535,7 +554,7 @@ export async function scrapeRaceResults(
 				// Insert results
 				await db.insert(raceResults).values(
 					results.map(r => ({
-						raceId: race.id,
+						distanceId: race.id,
 						position: r.position,
 						name: r.name,
 						bibNumber: r.bibNumber,
@@ -564,7 +583,7 @@ export async function scrapeRaceResults(
 // ── Find results URL and parse for a single race ────────────────────────────
 
 async function findAndParseResults(
-	race: typeof races.$inferSelect,
+	race: RaceForResults,
 	onLog: (msg: string) => void
 ): Promise<z.infer<typeof resultSchema>['results'] | null> {
 	let resultsUrl = race.resultsUrl;
@@ -623,7 +642,7 @@ async function findAndParseResults(
 
 	// Save the results URL for future reference (never save generic schedule pages)
 	if (resultsUrl && resultsUrl !== race.resultsUrl && !isGenericScheduleUrl(resultsUrl)) {
-		await db.update(races).set({ resultsUrl }).where(eq(races.id, race.id));
+		await db.update(raceDistances).set({ resultsUrl }).where(eq(raceDistances.id, race.id));
 	}
 
 	// Step 4: Parse the results page
@@ -750,7 +769,7 @@ async function parseWithLLM(
  * Checks DB first; if not found, queries the timing provider directly.
  */
 export async function lookupBibResult(
-	raceId: string,
+	distanceId: string,
 	bib: string
 ): Promise<{
 	position: number | null;
@@ -769,7 +788,7 @@ export async function lookupBibResult(
 	const existing = await db
 		.select()
 		.from(raceResults)
-		.where(and(eq(raceResults.raceId, raceId), eq(raceResults.bibNumber, normalizedBib)))
+		.where(and(eq(raceResults.distanceId, distanceId), eq(raceResults.bibNumber, normalizedBib)))
 		.limit(1);
 
 	if (existing.length > 0) {
@@ -787,8 +806,9 @@ export async function lookupBibResult(
 	}
 
 	// 2. Try timing provider
-	const race = await db.query.races.findFirst({ where: eq(races.id, raceId) });
-	if (!race?.resultsUrl) return [];
+	const dist = await db.query.raceDistances.findFirst({ where: eq(raceDistances.id, distanceId) });
+	if (!dist?.resultsUrl) return [];
+	const race = { resultsUrl: dist.resultsUrl, distanceKm: dist.distanceKm };
 
 	if (/live\.ultimate\.dk/i.test(race.resultsUrl)) {
 		const result = await fetchUltimateDkBibSearch(race.resultsUrl, normalizedBib);
@@ -863,20 +883,34 @@ async function fetchUltimateDkBibSearch(
 // ── Single race results fetch (for admin "fetch results" button) ─────────────
 
 export async function fetchResultsForRace(
-	raceId: string,
+	distanceId: string,
 	onLog: (msg: string) => void
 ): Promise<boolean> {
-	const race = await db.query.races.findFirst({ where: eq(races.id, raceId) });
-	if (!race) return false;
+	const row = await db
+		.select({
+			id: raceDistances.id,
+			name: raceDistances.name,
+			distanceKm: raceDistances.distanceKm,
+			raceDate: raceEditions.raceDate,
+			resultsUrl: raceDistances.resultsUrl,
+			websiteUrl: sql<string | null>`coalesce(${raceEditions.websiteUrl}, ${raceSeries.websiteUrl})`
+		})
+		.from(raceDistances)
+		.innerJoin(raceEditions, eq(raceDistances.editionId, raceEditions.id))
+		.innerJoin(raceSeries, eq(raceEditions.seriesId, raceSeries.id))
+		.where(eq(raceDistances.id, distanceId))
+		.limit(1);
+	if (row.length === 0) return false;
+	const race = row[0];
 
 	// Clear existing results
-	await db.delete(raceResults).where(eq(raceResults.raceId, raceId));
+	await db.delete(raceResults).where(eq(raceResults.distanceId, distanceId));
 
 	const results = await findAndParseResults(race, onLog);
 	if (results && results.length > 0) {
 		await db.insert(raceResults).values(
 			results.map(r => ({
-				raceId: race.id,
+				distanceId: race.id,
 				position: r.position,
 				name: r.name,
 				bibNumber: r.bibNumber,

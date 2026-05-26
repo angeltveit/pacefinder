@@ -3,8 +3,8 @@ import type { RawRaceLead } from '../types';
 
 export async function scrapeKondis(): Promise<RawRaceLead[]> {
 	try {
-		const res = await fetch('https://www.kondis.no/kalender/', {
-			headers: { 'User-Agent': 'RaceScout/1.0 (research bot)' },
+		const res = await fetch('https://www.kondis.no/lopsguiden', {
+			headers: { 'User-Agent': 'PaceFinder/1.0 (research bot)' },
 			signal: AbortSignal.timeout(15_000)
 		});
 		if (!res.ok) return [];
@@ -12,22 +12,23 @@ export async function scrapeKondis(): Promise<RawRaceLead[]> {
 		const html = await res.text();
 		const $ = cheerio.load(html);
 		const leads: RawRaceLead[] = [];
+		const seen = new Set<string>();
 
-		// kondis.no race calendar — selectors may need adjusting if site changes
-		$('.race-item, .event-item, article.race, tr.race-row').each((_, el) => {
+		// Løpsguiden entries are plain links with href matching /lopsguiden/<slug>/<id>
+		$('a[href*="/lopsguiden/"]').each((_, el) => {
 			const $el = $(el);
-			const name = $el.find('a').first().text().trim();
-			const href = $el.find('a').first().attr('href');
-			const description = $el.text().replace(/\s+/g, ' ').trim().slice(0, 400);
-
-			if (name && href) {
-				leads.push({
-					name,
-					url: href.startsWith('http') ? href : `https://www.kondis.no${href}`,
-					description,
-					source: 'kondis'
-				});
-			}
+			const href = $el.attr('href') ?? '';
+			// Skip non-entry links (e.g. the section header itself)
+			if (!href.match(/\/lopsguiden\/[^/]+\/\d+/)) return;
+			const name = $el.text().trim();
+			if (!name || name.length < 4 || seen.has(href)) return;
+			seen.add(href);
+			leads.push({
+				name,
+				url: href.startsWith('http') ? href : `https://www.kondis.no${href}`,
+				description: name, // title already contains date info
+				source: 'kondis'
+			});
 		});
 
 		return leads;

@@ -11,6 +11,8 @@ export interface ClassifiedRace {
 	eventName: string;
 	category: 'local' | 'norway' | 'international';
 	distanceKm: number | null;
+	/** Set by enrichment when the official site lists multiple distances, e.g. [5, 10] */
+	enrichedDistancesKm?: number[];
 	location: string | null;
 	city: string;
 	country: string;

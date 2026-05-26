@@ -18,32 +18,32 @@
 	let researching = $state(false);
 	let fetchingResults = $state(false);
 	let researchLog = $state<string[]>([]);
-	let bibResults = $state<{ position: number | null; name: string; bibNumber: string | null; finishTime: string; category: string | null; categoryPosition: number | null; club: string | null; distance: string | null }[]>([]);
+	let bibResults = $state<{ position: number | null; name: string; bibNumber: string | null; finishTime: string; category: string | null; categoryPosition: number | null; club: string | null; distance: string | null }[]>(
+		data.myResult ? [data.myResult] : []
+	);
 
 	// Re-sync local state when navigating between distances (same component, new data)
 	let prevRaceId = $state(data.race.id);
+	let prevResultsUrl = $state(data.race.resultsUrl);
 	$effect(() => {
 		if (data.race.id !== prevRaceId) {
+			const sameResultsUrl = data.race.resultsUrl === prevResultsUrl;
 			prevRaceId = data.race.id;
+			prevResultsUrl = data.race.resultsUrl;
 			comments = data.comments;
 			results = data.results;
 			myStatus = data.myStatus;
 			myBib = data.myBib ?? '';
 			bibInput = data.myBib ?? '';
 			editingBib = !data.myBib;
-			bibResults = [];
-			bibLookupDone = false;
+			if (!sameResultsUrl) {
+				bibResults = data.myResult ? [data.myResult] : [];
+				bibLookupDone = false;
+			}
 		}
 	});
 
-	// Auto-fetch bib result on page load if user has a bib
 	let bibLookupDone = $state(false);
-	$effect(() => {
-		if (myBib && !bibLookupDone) {
-			bibLookupDone = true;
-			refreshMyResult();
-		}
-	});
 
 	// ── Color palette (same as RaceCard) ──────────────────────────────────
 	const CARD_COLORS = [
@@ -300,7 +300,7 @@
 	const catLabel = $derived(categoryLabel(data.race.category, data.race.distanceKm));
 </script>
 
-<svelte:head><title>{data.race.name} — PaceFinder</title></svelte:head>
+<svelte:head><title>{data.race.eventName} — PaceFinder</title></svelte:head>
 
 <div class="detail-page">
 	<!-- Back link -->
@@ -318,7 +318,6 @@
 		</svg>
 
 		<div class="hero-content">
-			<div class="hero-distance">{bigDistance(data.race.distanceKm)}</div>
 			<div class="hero-cat">{catLabel}</div>
 		</div>
 
@@ -329,7 +328,7 @@
 
 	<!-- ═══ Main content ═══ -->
 	<div class="content-card">
-		<h1 class="title">{data.race.name}</h1>
+		<h1 class="title">{data.race.eventName}</h1>
 		<p class="meta">
 			📍 {data.race.city}{data.race.country !== 'NO' ? `, ${data.race.country}` : ''}
 			{#if data.race.location && data.race.location !== data.race.city}
@@ -412,7 +411,7 @@
 		</div>
 
 		<!-- My result (matched by BIB) -->
-		{#if myBib && myStatus === 'attending'}
+		{#if myBib}
 			<div class="my-result-card {bibResults.length > 0 ? 'has-result' : ''}">
 				<div class="my-result-header">
 					{bibResults.length > 0 ? '🎉 Your Results' : '⏳ Result not yet available'}

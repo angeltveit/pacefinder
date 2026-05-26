@@ -18,8 +18,9 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 
 	const [comment] = await db
 		.insert(comments)
-		.values({ raceId: params.id, userId: locals.user.id, body: parsed.data.body })
+		.values({ distanceId: params.id, userId: locals.user.id, body: parsed.data.body })
 		.returning();
 
 	return json({ ok: true, comment });
 };
+

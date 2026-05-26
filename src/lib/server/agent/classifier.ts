@@ -32,7 +32,11 @@ EXCLUDE:
 - Past races (race date before today)
 - Races with absolutely no registration info
 
-MULTI-DISTANCE EVENTS: If an event offers multiple qualifying distances (e.g. both 5K and 10K, or half and full marathon), create a SEPARATE entry for EACH qualifying distance with the correct distanceKm.
+MULTI-DISTANCE EVENTS — THIS IS CRITICAL:
+- If a race event offers multiple distances (e.g. 5K AND 10K, or half AND full marathon), you MUST output a SEPARATE object for EACH distance.
+- Do NOT merge them into one entry. Do NOT pick just one distance.
+- Example: "Bergensløpet" offers 5K and 10K → output TWO objects: one with distanceKm=5 and name="Bergensløpet – 5K", one with distanceKm=10 and name="Bergensløpet – 10K".
+- Scan the source text carefully for ALL distance options listed (look for km figures, distance names like "halvmaraton", "maraton", "5 km", "10 km", etc.).
 
 For medal_status:
 - "confirmed" if the event page explicitly states a medal
@@ -62,7 +66,6 @@ const raceSchema = z.object({
 			raceDateIso: z.string().nullable().describe('ISO 8601 date string or null — look carefully in the source text for exact dates'),
 			registrationUrl: z.string().nullable().describe('Direct registration/signup URL if found'),
 			websiteUrl: z.string().nullable().describe('Official race website URL (not the source/aggregator page)'),
-			sourceUrl: z.string(),
 			medalStatus: z.enum(['confirmed', 'likely', 'unclear']),
 			registrationStatus: z.enum(['open', 'opening_soon', 'unknown', 'closed']),
 			whyItFits: z.string().describe('1–2 punchy sentences. Be specific about why this race is worth attention. Mention medal, distance, scenery, travel value, or bragging rights.')
@@ -90,6 +93,8 @@ function fingerprint(name: string, city: string, dateIso: string | null): string
 	return slug;
 }
 
+const BATCH_SIZE = 10;
+
 export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 	classified: ClassifiedRace[];
 	tokensIn: number;
@@ -98,43 +103,67 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 }> {
 	if (leads.length === 0) return { classified: [], tokensIn: 0, tokensOut: 0, costUsd: 0 };
 
-	const prompt = leads
-		.map(
-			(l, i) =>
-				`[${i + 1}] ${l.name}\nSource: ${l.url}\n${l.description ?? ''}\n${l.rawText ?? ''}`
-		)
-		.join('\n\n---\n\n');
-
-	const { object, usage } = await generateObject({
-		model: getModel(),
-		system: SYSTEM_PROMPT(),
-		prompt,
-		schema: raceSchema
-	});
+	// Split into chunks to stay within model output token limits
+	const chunks: RawRaceLead[][] = [];
+	for (let i = 0; i < leads.length; i += BATCH_SIZE) {
+		chunks.push(leads.slice(i, i + BATCH_SIZE));
+	}
 
 	// Estimate cost (configurable price table — defaults to gpt-4o-mini pricing)
 	const inputPricePer1M = 0.15;
 	const outputPricePer1M = 0.6;
-	const costUsd =
-		((usage.promptTokens ?? 0) * inputPricePer1M +
-			(usage.completionTokens ?? 0) * outputPricePer1M) /
-		1_000_000;
 
-	const classified: ClassifiedRace[] = object.races.map((r) => ({
-		...r,
-		eventName: r.eventName ?? r.name,
-		raceDate: r.raceDateIso ? new Date(r.raceDateIso) : null,
-		websiteUrl: r.websiteUrl ?? null,
-		resultsUrl: null,
-		imageUrl: null,
-		rawLlmOutput: r,
-		fingerprint: fingerprint(r.name, r.city, r.raceDateIso)
-	}));
+	let totalTokensIn = 0;
+	let totalTokensOut = 0;
+	let totalCost = 0;
+	const allRaces: ClassifiedRace[] = [];
+
+	for (const chunk of chunks) {
+		const prompt = chunk
+			.map(
+				(l, i) =>
+					`[${i + 1}] ${l.name}\nSource: ${l.url}\n${l.description ?? ''}\n${l.rawText ?? ''}`
+			)
+			.join('\n\n---\n\n');
+
+		const { object, usage } = await generateObject({
+			model: getModel(),
+			system: SYSTEM_PROMPT(),
+			prompt,
+			schema: raceSchema,
+			maxTokens: 8000
+		});
+
+		totalTokensIn += usage.promptTokens ?? 0;
+		totalTokensOut += usage.completionTokens ?? 0;
+		totalCost +=
+			((usage.promptTokens ?? 0) * inputPricePer1M +
+				(usage.completionTokens ?? 0) * outputPricePer1M) /
+			1_000_000;
+
+		// Build url→lead map so we can inject sourceUrl without asking the LLM to echo it
+		const urlMap = new Map(chunk.map((l) => [l.url, l]));
+
+		for (const r of object.races) {
+			const sourceLead = (r.websiteUrl ? urlMap.get(r.websiteUrl) : undefined) ?? chunk[0];
+			allRaces.push({
+				...r,
+				eventName: r.eventName ?? r.name,
+				raceDate: r.raceDateIso ? new Date(r.raceDateIso) : null,
+				websiteUrl: r.websiteUrl ?? null,
+				sourceUrl: sourceLead.url,
+				resultsUrl: null,
+				imageUrl: null,
+				rawLlmOutput: r,
+				fingerprint: fingerprint(r.name, r.city, r.raceDateIso)
+			});
+		}
+	}
 
 	return {
-		classified,
-		tokensIn: usage.promptTokens ?? 0,
-		tokensOut: usage.completionTokens ?? 0,
-		costUsd
+		classified: allRaces,
+		tokensIn: totalTokensIn,
+		tokensOut: totalTokensOut,
+		costUsd: totalCost
 	};
 }

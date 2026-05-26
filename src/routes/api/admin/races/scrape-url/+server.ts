@@ -1,10 +1,8 @@
 import { error } from '@sveltejs/kit';
 import * as cheerio from 'cheerio';
-import { db } from '$lib/server/db';
-import { races } from '$lib/server/db/schema';
-import { eq, sql } from 'drizzle-orm';
 import { classifyRaces } from '$lib/server/agent/classifier';
 import { enrichRaces } from '$lib/server/agent/enrichment';
+import { upsertClassifiedRace } from '$lib/server/agent/index';
 import type { RawRaceLead } from '$lib/server/agent/types';
 import type { RequestHandler } from './$types';
 
@@ -79,41 +77,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				let racesUpdated = 0;
 
 				for (const race of enriched) {
-					const existing = await db.query.races.findFirst({
-						where: eq(races.fingerprint, race.fingerprint)
-					});
-
-					if (!existing) {
-						await db.insert(races).values(race);
+					const { isNew } = await upsertClassifiedRace(race, log);
+					if (isNew) {
 						racesNew++;
 						log(`  ✓ Added: ${race.name} (${race.city})`);
 					} else {
-						await db.update(races).set({
-							registrationStatus: race.registrationStatus,
-							registrationUrl: race.registrationUrl ?? existing.registrationUrl,
-							resultsUrl: race.resultsUrl ?? existing.resultsUrl,
-							medalStatus: race.medalStatus,
-							websiteUrl: race.websiteUrl ?? existing.websiteUrl,
-							imageUrl: race.imageUrl ?? existing.imageUrl,
-							raceDate: race.raceDate ?? existing.raceDate,
-							eventName: race.eventName ?? existing.eventName,
-							lastUpdatedAt: new Date()
-						}).where(eq(races.fingerprint, race.fingerprint));
 						racesUpdated++;
 						log(`  ↻ Updated: ${race.name} (already existed)`);
 					}
 				}
-
-				// Propagate medal confirmations across sibling distances
-				await db.execute(sql`
-					UPDATE races SET medal_status = 'confirmed', last_updated_at = now()
-					WHERE medal_status != 'confirmed'
-					AND EXISTS (
-						SELECT 1 FROM races r2
-						WHERE r2.medal_status = 'confirmed' AND r2.id != races.id
-						AND split_part(races.name, ' – ', 1) = split_part(r2.name, ' – ', 1)
-					)
-				`);
 
 				send('done', { racesNew, racesUpdated });
 			} catch (err) {

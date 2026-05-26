@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { raceUserStatus } from '$lib/server/db/schema';
+import { raceDistances, raceUserStatus } from '$lib/server/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
@@ -21,22 +21,26 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 
 	const { status, bibNumber, notes } = parsed.data;
 	const userId = locals.user.id;
-	const raceId = params.id;
+
+	// params.id is a distanceId — resolve to editionId
+	const dist = await db.query.raceDistances.findFirst({ where: eq(raceDistances.id, params.id) });
+	if (!dist) error(404, 'Race not found');
+	const editionId = dist.editionId;
 
 	if (status === null) {
-		// Remove triage
 		await db
 			.delete(raceUserStatus)
-			.where(and(eq(raceUserStatus.userId, userId), eq(raceUserStatus.raceId, raceId)));
+			.where(and(eq(raceUserStatus.userId, userId), eq(raceUserStatus.editionId, editionId)));
 	} else {
 		await db
 			.insert(raceUserStatus)
-			.values({ userId, raceId, status, bibNumber: bibNumber ?? null, notes, updatedAt: new Date() })
+			.values({ userId, editionId, status, bibNumber: bibNumber ?? null, notes, updatedAt: new Date() })
 			.onConflictDoUpdate({
-				target: [raceUserStatus.userId, raceUserStatus.raceId],
+				target: [raceUserStatus.userId, raceUserStatus.editionId],
 				set: { status, bibNumber: bibNumber ?? null, notes, updatedAt: new Date() }
 			});
 	}
 
 	return json({ ok: true });
 };
+

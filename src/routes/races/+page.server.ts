@@ -1,6 +1,6 @@
 import { db } from '$lib/server/db';
-import { races, raceUserStatus } from '$lib/server/db/schema';
-import { desc, eq, sql, and, inArray } from 'drizzle-orm';
+import { raceSeries, raceEditions, raceDistances, raceUserStatus } from '$lib/server/db/schema';
+import { desc, eq, sql, and, inArray, asc, isNull } from 'drizzle-orm';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url, locals }) => {
@@ -11,106 +11,118 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const myStatus = url.searchParams.get('mine') ?? '';
 
 	const conditions = [];
-	if (category) conditions.push(eq(races.category, category));
-	if (medal) conditions.push(eq(races.medalStatus, medal));
-	if (regStatus) conditions.push(eq(races.registrationStatus, regStatus));
+	if (category) conditions.push(eq(raceSeries.category, category));
+	if (regStatus) conditions.push(eq(raceEditions.registrationStatus, regStatus));
+	if (medal) conditions.push(
+		sql`EXISTS (SELECT 1 FROM race_distances WHERE edition_id = ${raceEditions.id} AND medal_status = ${medal})`
+	);
+	if (myStatus && userId) conditions.push(
+		sql`EXISTS (
+			SELECT 1 FROM race_user_status rus
+			WHERE rus.edition_id = ${raceEditions.id}
+			AND rus.user_id = ${userId}
+			AND rus.status = ${myStatus}
+		)`
+	);
 
-	const baseQuery = db
+	const editionRows = await db
 		.select({
-			race: races,
-			myStatus: raceUserStatus.status,
+			editionId: raceEditions.id,
+			seriesId: raceSeries.id,
+			eventName: raceSeries.name,
+			category: raceSeries.category,
+			city: raceSeries.city,
+			country: raceSeries.country,
+			imageUrl: raceSeries.imageUrl,
+			whyItFits: raceSeries.whyItFits,
+			raceDate: raceEditions.raceDate,
+			registrationStatus: raceEditions.registrationStatus,
+			websiteUrl: sql<string | null>`coalesce(${raceEditions.websiteUrl}, ${raceSeries.websiteUrl})`,
+			firstSeenAt: raceEditions.firstSeenAt,
 			interestedCount: sql<number>`(
-				select count(*) from race_user_status
-				where race_id = ${races.id} and status in ('interested', 'attending')
+				select count(*) from race_user_status rus
+				where rus.edition_id = ${raceEditions.id}
+				and rus.status in ('interested', 'attending')
 			)`.as('interested_count'),
 			commentCount: sql<number>`(
-				select count(*) from comments
-				where race_id = ${races.id} and deleted_at is null
-			)`.as('comment_count')
+				select count(*) from comments c
+				join race_distances rd on rd.id = c.distance_id
+				where rd.edition_id = ${raceEditions.id}
+				and c.deleted_at is null
+			)`.as('comment_count'),
+			medalStatus: sql<string>`(
+				select case
+					when bool_or(medal_status = 'confirmed') then 'confirmed'
+					when bool_or(medal_status = 'likely') then 'likely'
+					else 'unclear'
+				end from race_distances where edition_id = ${raceEditions.id}
+			)`.as('medal_status'),
+			myStatus: userId
+				? sql<string | null>`(
+					select rus.status from race_user_status rus
+					where rus.edition_id = ${raceEditions.id}
+					and rus.user_id = ${userId}
+					and rus.status in ('interested', 'attending')
+					limit 1
+				)`.as('my_status')
+				: sql<null>`null`.as('my_status')
 		})
-		.from(races)
-		.leftJoin(
-			raceUserStatus,
-			userId
-				? sql`${raceUserStatus.raceId} = ${races.id} and ${raceUserStatus.userId} = ${userId}`
-				: sql`false`
-		);
-
-	const allConditions =
-		myStatus && userId
-			? [...conditions, eq(raceUserStatus.status, myStatus)]
-			: conditions;
-
-	const rows = await baseQuery
-		.where(allConditions.length ? and(...allConditions) : undefined)
-		.orderBy(desc(races.firstSeenAt))
+		.from(raceEditions)
+		.innerJoin(raceSeries, eq(raceEditions.seriesId, raceSeries.id))
+		.where(conditions.length ? and(...conditions) : undefined)
+		.orderBy(desc(raceEditions.firstSeenAt))
 		.limit(200);
 
-	// Group by event_name
-	const eventMap = new Map<string, {
-		eventName: string;
-		category: string;
-		city: string;
-		country: string;
-		raceDate: string | null;
-		medalStatus: string;
-		registrationStatus: string;
-		websiteUrl: string | null;
-		imageUrl: string | null;
-		whyItFits: string | null;
-		interestedCount: number;
-		commentCount: number;
-		myStatus: string | null;
-		distances: { id: string; distanceKm: number | null; registrationUrl: string | null }[];
-		firstSeenAt: string;
-		primaryId: string;
-	}>();
+	// Fetch distances for all returned editions in one query
+	const editionIds = editionRows.map((r) => r.editionId);
+	const distanceRows =
+		editionIds.length > 0
+			? await db
+					.select({
+						editionId: raceDistances.editionId,
+						id: raceDistances.id,
+						distanceKm: raceDistances.distanceKm,
+						registrationUrl: raceDistances.registrationUrl
+					})
+					.from(raceDistances)
+					.where(inArray(raceDistances.editionId, editionIds))
+					.orderBy(asc(raceDistances.distanceKm))
+			: [];
 
-	for (const r of rows) {
-		const key = r.race.eventName ?? r.race.name;
-		const distance = {
-			id: r.race.id,
-			distanceKm: r.race.distanceKm,
-			registrationUrl: r.race.registrationUrl
-		};
-		const existing = eventMap.get(key);
-
-		if (existing) {
-			existing.distances.push(distance);
-			existing.interestedCount += Number(r.interestedCount);
-			existing.commentCount += Number(r.commentCount);
-			if (!existing.imageUrl && r.race.imageUrl) existing.imageUrl = r.race.imageUrl;
-			if (!existing.websiteUrl && r.race.websiteUrl) existing.websiteUrl = r.race.websiteUrl;
-			if (!existing.raceDate && r.race.raceDate) existing.raceDate = r.race.raceDate.toISOString();
-			if (r.race.medalStatus === 'confirmed') existing.medalStatus = 'confirmed';
-			else if (r.race.medalStatus === 'likely' && existing.medalStatus !== 'confirmed') existing.medalStatus = 'likely';
-			if (r.myStatus === 'interested' || r.myStatus === 'attending') existing.myStatus = r.myStatus;
-		} else {
-			eventMap.set(key, {
-				eventName: key,
-				category: r.race.category,
-				city: r.race.city,
-				country: r.race.country,
-				raceDate: r.race.raceDate?.toISOString() ?? null,
-				medalStatus: r.race.medalStatus,
-				registrationStatus: r.race.registrationStatus,
-				websiteUrl: r.race.websiteUrl,
-				imageUrl: r.race.imageUrl,
-				whyItFits: r.race.whyItFits,
-				interestedCount: Number(r.interestedCount),
-				commentCount: Number(r.commentCount),
-				myStatus: r.myStatus ?? null,
-				distances: [distance],
-				firstSeenAt: r.race.firstSeenAt.toISOString(),
-				primaryId: r.race.id
-			});
-		}
+	const distByEdition = new Map<string, typeof distanceRows>();
+	for (const d of distanceRows) {
+		const key = d.editionId!;
+		if (!distByEdition.has(key)) distByEdition.set(key, []);
+		distByEdition.get(key)!.push(d);
 	}
 
-	const events = [...eventMap.values()].map(e => ({
-		...e,
-		distances: e.distances.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0))
-	}));
+	const events = editionRows.map((e) => {
+		const distances = distByEdition.get(e.editionId) ?? [];
+		return {
+			editionId: e.editionId,
+			seriesId: e.seriesId,
+			eventName: e.eventName,
+			category: e.category,
+			city: e.city,
+			country: e.country,
+			imageUrl: e.imageUrl,
+			whyItFits: e.whyItFits,
+			raceDate: e.raceDate?.toISOString() ?? null,
+			registrationStatus: e.registrationStatus,
+			websiteUrl: e.websiteUrl,
+			medalStatus: e.medalStatus,
+			interestedCount: Number(e.interestedCount),
+			commentCount: Number(e.commentCount),
+			myStatus: e.myStatus ?? null,
+			distances: distances.map((d) => ({
+				id: d.id,
+				distanceKm: d.distanceKm,
+				registrationUrl: d.registrationUrl
+			})),
+			primaryId: distances[0]?.id ?? e.editionId,
+			firstSeenAt: e.firstSeenAt.toISOString()
+		};
+	});
 
 	return {
 		events,

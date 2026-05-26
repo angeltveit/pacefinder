@@ -3,8 +3,8 @@ import type { RawRaceLead } from '../types';
 
 export async function scrapeFriidrett(): Promise<RawRaceLead[]> {
 	try {
-		const res = await fetch('https://www.friidrett.no/stevner/', {
-			headers: { 'User-Agent': 'RaceScout/1.0 (research bot)' },
+		const res = await fetch('https://www.friidrett.no/kalender/', {
+			headers: { 'User-Agent': 'PaceFinder/1.0 (research bot)' },
 			signal: AbortSignal.timeout(15_000)
 		});
 		if (!res.ok) return [];
@@ -12,13 +12,17 @@ export async function scrapeFriidrett(): Promise<RawRaceLead[]> {
 		const html = await res.text();
 		const $ = cheerio.load(html);
 		const leads: RawRaceLead[] = [];
+		const seen = new Set<string>();
 
-		$('a[href*="stevne"], a[href*="race"], a[href*="løp"], .event a, .race a').each((_, el) => {
+		// friidrett.no calendar links — LLM will filter out non-running events
+		$('a[href*="/kalender/"]').each((_, el) => {
 			const $el = $(el);
-			const name = $el.text().trim();
-			const href = $el.attr('href');
-			if (!name || !href || name.length < 4) return;
-
+			const href = $el.attr('href') ?? '';
+			if (!href.match(/\/kalender\/[^/]+\/?$/)) return;
+			const rawText = $el.closest('li, div, p').text().replace(/\s+/g, ' ').trim();
+			const name = rawText.slice(0, 120) || $el.text().trim();
+			if (!name || name.length < 5 || seen.has(href)) return;
+			seen.add(href);
 			leads.push({
 				name,
 				url: href.startsWith('http') ? href : `https://www.friidrett.no${href}`,

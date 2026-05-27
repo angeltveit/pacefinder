@@ -1,5 +1,4 @@
 import type { RawRaceLead } from '../types';
-import { REGION_KEYWORDS } from './registry';
 
 /** EQ Timing public JSON API */
 const API_URL = 'https://events.eqtiming.com/api/events';
@@ -18,16 +17,39 @@ function getTopSport(e: EqEvent): string {
 	return e.Sport?.Parent?.Parent?.Name ?? e.Sport?.Parent?.Name ?? e.Sport?.Name ?? '';
 }
 
-/**
- * Scrape EQ Timing's public event API for running-related events
- * in target locations. Returns RawRaceLeads for the agent classifier.
- *
- * @param locationFilter - optional array of location keywords to restrict to.
- *   Defaults to all Norwegian region keywords.
- */
-export async function scrapeEqTiming(locationFilter?: string[]): Promise<RawRaceLead[]> {
-	const targetLocations = locationFilter ?? getAllNorwegianKeywords();
+/** Get the leaf sport name (most specific category) */
+function getLeafSport(e: EqEvent): string {
+	return e.Sport?.Name ?? '';
+}
 
+/** Keywords that indicate track & field meets, school events, or non-road races */
+const EXCLUDE_KEYWORDS = [
+	'rulleski', 'ski ', 'skiskyting', 'orientering',
+	'friidrettsstevne', 'stevne', 'innendørs', 'indoor',
+	'hallstevne', 'kastdag', 'kast ', 'spyd', 'kule',
+	'høyde', 'lengde', 'stav', 'diskos', 'sprint',
+	'skolemesterskap', 'skole', 'barneidrett',
+	'fleridrett', 'mangekamp', 'tierkamp', 'heptathlon', 'decathlon',
+	'gång', 'gang ', 'gå ',
+	'stafett cup', 'banesprint'
+];
+
+/** Keywords that strongly indicate road/trail running races we want */
+const INCLUDE_KEYWORDS = [
+	'maraton', 'marathon', 'halvmaraton', 'half marathon',
+	'løp', 'run', 'ultraløp', 'ultra', 'mila', 'mil ',
+	'trail', 'fjell', 'mountain', 'sti',
+	'5k', '10k', '15k', '20k', '3k',
+	'5 km', '10 km', '15 km', '21 km', '42 km',
+	'motbakke', 'gate', 'terreng', 'cross',
+	'birken', 'karusell'
+];
+
+/**
+ * Scrape EQ Timing's public event API for road/trail running events.
+ * Uses keyword heuristics to filter out track & field meets before LLM classification.
+ */
+export async function scrapeEqTiming(): Promise<RawRaceLead[]> {
 	try {
 		const res = await fetch(API_URL, {
 			headers: { 'User-Agent': 'PaceFinder/1.0 (research bot)' },
@@ -51,23 +73,33 @@ export async function scrapeEqTiming(locationFilter?: string[]): Promise<RawRace
 			if (e.Signup?.Cancelled) continue;
 			if (e.Name.includes('CANCELLED')) continue;
 
-			// Filter by location — match against city name or event name
-			const city = e.City?.Name ?? '';
-			const matchText = `${e.Name} ${city}`.toLowerCase();
-			const matchesLocation = targetLocations.some((kw) => matchText.includes(kw));
-			if (!matchesLocation) continue;
-
-			// Skip obvious non-running keywords in name (some Athletics events are rulleski, etc.)
 			const nameLower = e.Name.toLowerCase();
-			const nonRunning = ['rulleski', 'ski ', 'skiskyting', 'orientering'];
-			if (nonRunning.some((kw) => nameLower.includes(kw))) continue;
+			const leafSport = getLeafSport(e).toLowerCase();
+
+			// Exclude obvious non-road-race events
+			if (EXCLUDE_KEYWORDS.some((kw) => nameLower.includes(kw))) continue;
+
+			// If the name doesn't match any running keyword, check leaf sport
+			const hasRunKeyword = INCLUDE_KEYWORDS.some((kw) => nameLower.includes(kw));
+			if (!hasRunKeyword) {
+				// Allow events whose leaf sport clearly indicates running
+				const leafOk = ['running', 'road running', 'trail', 'mountain running', 'cross country', 'ultra'].some(
+					(s) => leafSport.includes(s)
+				);
+				// If neither name nor leaf sport indicate running, skip
+				if (!leafOk) continue;
+			}
+
+			const city = e.City?.Name ?? '';
+			const country = e.City?.Country?.Iso2 ?? '';
 
 			leads.push({
 				name: e.Name,
 				url: `https://live.eqtiming.com/${e.Id}`,
-				description: city ? `Location: ${city}` : undefined,
+				description: [city, country].filter(Boolean).join(', ') || undefined,
 				source: 'eqtiming',
-				rawText: `${e.Name} — ${city} — ${e.Starttime.split('T')[0]}`
+				rawText: `${e.Name} — ${city} ${country} — ${e.Starttime.split('T')[0]}`,
+				date: e.Starttime.split('T')[0]
 			});
 		}
 
@@ -75,15 +107,4 @@ export async function scrapeEqTiming(locationFilter?: string[]): Promise<RawRace
 	} catch {
 		return [];
 	}
-}
-
-/** Union of all Norwegian region keywords */
-function getAllNorwegianKeywords(): string[] {
-	const all = new Set<string>();
-	for (const [region, keywords] of Object.entries(REGION_KEYWORDS)) {
-		if (region !== 'norway') {
-			keywords.forEach((k) => all.add(k));
-		}
-	}
-	return [...all];
 }

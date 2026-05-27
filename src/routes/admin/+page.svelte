@@ -9,12 +9,38 @@
 	let spendPct = $derived(Math.min((data.budget.monthlySpend / monthlyBudget) * 100, 100));
 	let overBudget = $derived(data.budget.monthlySpend >= monthlyBudget);
 
+	const allSources = [
+		{ id: 'eqtiming', label: 'EQ Timing', countries: 'NO/SE' },
+		{ id: 'sportstiming', label: 'SportsTiming', countries: 'DK/SE' },
+		{ id: 'timataka', label: 'Timataka', countries: 'IS' },
+		{ id: 'racetimer', label: 'RaceTimer', countries: 'SE' },
+		{ id: 'kondis', label: 'Kondis', countries: 'NO' },
+		{ id: 'friidrett', label: 'Friidrett', countries: 'NO' }
+	];
+	let enabledSources = $state<string[]>(allSources.map((s) => s.id));
+
+	function toggleSource(id: string) {
+		if (enabledSources.includes(id)) {
+			enabledSources = enabledSources.filter((s) => s !== id);
+		} else {
+			enabledSources = [...enabledSources, id];
+		}
+	}
+
+	let abortController: AbortController | null = null;
+
 	async function triggerAgent() {
 		triggering = true;
 		triggerResult = '';
 		agentLogs = [];
+		abortController = new AbortController();
 		try {
-			const res = await fetch('/api/admin/agent/run', { method: 'POST' });
+			const res = await fetch('/api/admin/agent/run', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ sources: enabledSources }),
+				signal: abortController.signal
+			});
 			const reader = res.body!.getReader();
 			const decoder = new TextDecoder();
 			let buf = '';
@@ -35,11 +61,20 @@
 					} catch { /* ignore malformed */ }
 				}
 			}
-		} catch {
-			triggerResult = '✗ Request failed';
+		} catch (e) {
+			if (e instanceof DOMException && e.name === 'AbortError') {
+				triggerResult = '⏹ Cancelled';
+			} else {
+				triggerResult = '✗ Request failed';
+			}
 		} finally {
 			triggering = false;
+			abortController = null;
 		}
+	}
+
+	function cancelAgent() {
+		abortController?.abort();
 	}
 
 	async function extendBudget() {
@@ -186,16 +221,47 @@
 		<h1 class="text-2xl font-bold text-slate-100">Dashboard</h1>
 		<div class="flex items-center gap-3">
 			{#if triggerResult}
-				<span class="text-sm {triggerResult.startsWith('✓') ? 'text-green-400' : 'text-red-400'}">{triggerResult}</span>
+				<span class="text-sm {triggerResult.startsWith('✓') ? 'text-green-400' : triggerResult.startsWith('⏹') ? 'text-amber-400' : 'text-red-400'}">{triggerResult}</span>
+			{/if}
+			{#if triggering}
+				<button
+					onclick={cancelAgent}
+					class="rounded-lg border border-red-600 px-4 py-2 text-sm font-semibold text-red-400 hover:bg-red-900/30"
+				>
+					⏹ Cancel
+				</button>
 			{/if}
 			<button
 				onclick={triggerAgent}
-				disabled={triggering}
+				disabled={triggering || enabledSources.length === 0}
 				class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-slate-900 hover:brightness-110 disabled:opacity-60"
 			>
 				{triggering ? 'Running…' : '▶ Run Agent'}
 			</button>
 		</div>
+	</div>
+
+	<!-- Source selection -->
+	<div class="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+		<h2 class="mb-3 font-semibold text-slate-100">Sources to scrape</h2>
+		<div class="flex flex-wrap gap-3">
+			{#each allSources as source}
+				<label class="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-900/60 px-3 py-2 text-sm cursor-pointer select-none hover:border-slate-600 transition-colors {enabledSources.includes(source.id) ? 'border-brand/50 bg-brand/10' : ''}">
+					<input
+						type="checkbox"
+						checked={enabledSources.includes(source.id)}
+						onchange={() => toggleSource(source.id)}
+						disabled={triggering}
+						class="accent-brand"
+					/>
+					<span class="text-slate-200">{source.label}</span>
+					<span class="text-xs text-slate-500">{source.countries}</span>
+				</label>
+			{/each}
+		</div>
+		{#if enabledSources.length === 0}
+			<p class="mt-2 text-xs text-amber-400">Select at least one source to run the agent.</p>
+		{/if}
 	</div>
 
 	<!-- Agent log -->

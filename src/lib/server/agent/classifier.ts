@@ -5,70 +5,68 @@ import { z } from 'zod';
 import { env } from '$env/dynamic/private';
 import type { RawRaceLead, ClassifiedRace } from './types';
 
-const SYSTEM_PROMPT = () => `You are a running race research assistant for a user based in Bergen, Norway.
-Your job is to classify and enrich race leads according to strict relevance rules.
+const SYSTEM_PROMPT = () => `You are a running race classifier for a Nordic race discovery app.
+Your job is to process scraped race leads from timing systems across Norway, Sweden, Denmark, Finland, and Iceland.
 Today's date: ${new Date().toISOString().split('T')[0]}. Use this to resolve relative dates and filter out past events.
 
 CRITICAL RULES FOR DATES:
-- ALWAYS look for exact dates in the source text. Dates appear as "14. juni 2026", "June 14, 2026", "14.06.2026", "2026-06-14" etc.
-- If a month/year is mentioned but not an exact day, use the 1st of that month (e.g. "juni 2026" → "2026-06-01").
+- ALWAYS look for exact dates in the source text. Dates appear as "14. juni 2026", "June 14, 2026", "14.06.2026", "2026-06-14", "30. maí" etc.
+- If a month/year is mentioned but not an exact day, use the 1st of that month.
 - NEVER return null for raceDateIso if there is ANY date information in the source text.
 - Only return null if genuinely zero date info exists.
 
-CRITICAL RULES FOR URLS:
-- websiteUrl should be the race's OWN official website (not kondis.no, friidrett.no, or the search result page).
-- If the source text contains a URL to the race's own domain, always include it as websiteUrl.
-- registrationUrl should be the direct signup/entry form page if visible.
+INCLUDE — all of these:
+- Running races 3km and above (3K, 5K, 10K, half marathon, marathon, ultra)
+- Trail runs
+- Obstacle/mud runs (if primarily running-based)
+- Relay races that are running-based
 
-INCLUDE:
-- LOCAL: Any running race within ~90 minutes of Bergen City Center with a finisher medal (confirmed or likely). This includes 5K, 10K, half marathon, marathon, obstacle runs, trail runs — any distance.
-- NORWAY: Half marathons and marathons in major Norwegian cities (Oslo, Trondheim, Stavanger, Tromsø, Ålesund, Kristiansand, Bodø, Bergen, Drammen, Fredrikstad, Haugesund) — travel-worthy with a medal.
-- INTERNATIONAL: Major marathons (Berlin, London, New York, Chicago, Tokyo, Boston, Paris, Valencia, Stockholm, Copenhagen, Amsterdam), iconic/scenic halfs, bucket-list routes with strong medal or prestige.
-
-EXCLUDE:
+EXCLUDE — filter these OUT:
+- Non-running sports: triathlons, duathlons, cycling, swimming, skiing, orienteering, walking, dog sledding, HYROX
+- Recurring weekly/monthly casual "runclub" jogs (e.g. "Løpeserie uke 12", "Parkrun", weekly training runs, "Hlaupasería" monthly series)
 - Virtual races
-- Training runs / mosjonsløp explicitly without medals
-- Kids-only races
+- Kids-only races (under 12)
 - Past races (race date before today)
-- Races with absolutely no registration info
+- Races under 3km
 
-MULTI-DISTANCE EVENTS — THIS IS CRITICAL:
-- If a race event offers multiple distances (e.g. 5K AND 10K, or half AND full marathon), you MUST output a SEPARATE object for EACH distance.
-- Do NOT merge them into one entry. Do NOT pick just one distance.
-- Example: "Bergensløpet" offers 5K and 10K → output TWO objects: one with distanceKm=5 and name="Bergensløpet – 5K", one with distanceKm=10 and name="Bergensløpet – 10K".
-- Scan the source text carefully for ALL distance options listed (look for km figures, distance names like "halvmaraton", "maraton", "5 km", "10 km", etc.).
+HOW TO DETECT RUNCLUB/RECURRING:
+- Monthly numbered series (e.g. "(Mars)", "(Janúar)", "uke 5")
+- "Powerade vetrarhlaupið" numbered series — these ARE real races, INCLUDE them
+- Weekly parkruns or "Lørdagsløp" without specific event names
+- Events with names like "Treningsløp", "Tirsdagsløp", "Onsdagsløp" suggesting weekday jogs
+
+MULTI-DISTANCE EVENTS:
+- If a race offers multiple distances (e.g. 5K AND 10K), output a SEPARATE object for EACH distance.
+- Example: "Oslo Maraton" with 10K, half, and full → THREE objects.
+- If you can't determine specific distances, output one object with distanceKm = null.
 
 For medal_status:
-- "confirmed" if the event page explicitly states a medal
-- "likely" if it is a named race event (not a mosjonsløp), especially with registration fees or club organisation — most real races give medals
-- "unclear" only if you genuinely have no information
+- "confirmed" if explicitly mentioned (medal, medalje, verðlaun)
+- "likely" if it's a named race event with registration fee and official organization (most named 10K+ races give medals)
+- "unclear" if small local event or genuinely unknown
 
-For whyItFits:
-- Be punchy, fun, specific. Not bureaucratic.
-- Good: "Close enough that you can't make excuses. Medal likely."
-- Good: "High story value. Arctic scenery with low crowd density."
-- Bad: "A named Bergen road race organised under Norges Friidrettsforbund..."
+For country:
+- Infer from the source (eqtiming=NO/SE, sportstiming=DK/SE, timataka=IS, racetimer=SE, kondis=NO, friidrett=NO)
+- If city is mentioned, use that to determine country
+- Use ISO 2-letter codes: NO, SE, DK, FI, IS
 
-Be INCLUSIVE: when in doubt about a local Bergen-area race, include it with medal_status "likely". It is better to include a borderline race than to miss it.
-
-Return ONLY races that pass the inclusion criteria. Return an empty array if nothing qualifies.`;
+Return ALL qualifying races. Do NOT filter by region — include everything from all Nordic countries.`;
 
 const raceSchema = z.object({
 	races: z.array(
 		z.object({
 			name: z.string(),
-			eventName: z.string().describe('Base event name WITHOUT distance suffix or year. E.g. "Bergen City Marathon" not "Bergen City Marathon – 5K". Strip sponsor prefixes for clean grouping.'),
-			category: z.enum(['local', 'norway', 'international']),
+			eventName: z.string().describe('Base event name WITHOUT distance suffix or year. E.g. "Oslo Maraton" not "Oslo Maraton – 10K". Strip sponsor prefixes.'),
 			distanceKm: z.number().nullable(),
 			location: z.string().nullable(),
 			city: z.string(),
-			country: z.string().default('NO'),
-			raceDateIso: z.string().nullable().describe('ISO 8601 date string or null — look carefully in the source text for exact dates'),
+			country: z.string().describe('ISO 2-letter country code: NO, SE, DK, FI, IS'),
+			raceDateIso: z.string().nullable().describe('ISO 8601 date string or null'),
 			registrationUrl: z.string().nullable().describe('Direct registration/signup URL if found'),
-			websiteUrl: z.string().nullable().describe('Official race website URL (not the source/aggregator page)'),
+			websiteUrl: z.string().nullable().describe('Official race website URL (not the aggregator page)'),
 			medalStatus: z.enum(['confirmed', 'likely', 'unclear']),
 			registrationStatus: z.enum(['open', 'opening_soon', 'unknown', 'closed']),
-			whyItFits: z.string().describe('1–2 punchy sentences. Be specific about why this race is worth attention. Mention medal, distance, scenery, travel value, or bragging rights.')
+			whyItFits: z.string().describe('1–2 punchy sentences about what makes this race interesting. Mention medal, distance, scenery, or vibe.')
 		})
 	)
 });
@@ -93,7 +91,7 @@ function fingerprint(name: string, city: string, dateIso: string | null): string
 	return slug;
 }
 
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 15;
 
 export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 	classified: ClassifiedRace[];
@@ -122,7 +120,7 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 		const prompt = chunk
 			.map(
 				(l, i) =>
-					`[${i + 1}] ${l.name}\nSource: ${l.url}\n${l.description ?? ''}\n${l.rawText ?? ''}`
+					`[${i + 1}] ${l.name}\nSource: ${l.source} | ${l.url}\n${l.description ?? ''}\n${l.rawText ?? ''}`
 			)
 			.join('\n\n---\n\n');
 
@@ -148,6 +146,7 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 			const sourceLead = (r.websiteUrl ? urlMap.get(r.websiteUrl) : undefined) ?? chunk[0];
 			allRaces.push({
 				...r,
+				category: inferCategory(r.country, r.city, r.distanceKm),
 				eventName: r.eventName ?? r.name,
 				raceDate: r.raceDateIso ? new Date(r.raceDateIso) : null,
 				websiteUrl: r.websiteUrl ?? null,
@@ -166,4 +165,15 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 		tokensOut: totalTokensOut,
 		costUsd: totalCost
 	};
+}
+
+/**
+ * Infer category based on country. This is now done in code, not by the LLM.
+ * The app can later use this + user location to filter in the UI.
+ */
+function inferCategory(country: string, _city: string, _distanceKm: number | null): 'local' | 'norway' | 'international' {
+	// For now: NO = norway, everything else = international
+	// "local" category will be determined per-user in the app layer
+	if (country === 'NO') return 'norway';
+	return 'international';
 }

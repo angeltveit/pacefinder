@@ -4,6 +4,8 @@ export interface RawRaceLead {
 	url: string;
 	source: string;
 	rawText?: string;
+	/** ISO date string (YYYY-MM-DD) if known at scrape time, used for pre-LLM filtering */
+	date?: string;
 }
 
 export interface ClassifiedRace {

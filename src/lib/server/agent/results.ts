@@ -741,6 +741,7 @@ async function parseWithLLM(
 	try {
 		const { object } = await generateObject({
 			model: getModel(),
+			mode: 'json',
 			system: RESULTS_SYSTEM + distanceContext,
 			prompt: tableContent,
 			schema: resultSchema,

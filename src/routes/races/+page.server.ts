@@ -1,17 +1,42 @@
 import { db } from '$lib/server/db';
 import { raceSeries, raceEditions, raceDistances, raceUserStatus } from '$lib/server/db/schema';
-import { desc, eq, sql, and, inArray, asc, isNull } from 'drizzle-orm';
+import { desc, eq, sql, and, inArray, asc, gte, lt, ilike, or } from 'drizzle-orm';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url, locals }) => {
 	const userId = locals.user?.id ?? null;
+	const q = url.searchParams.get('q') ?? '';
 	const category = url.searchParams.get('category') ?? '';
+	const time = url.searchParams.get('time') ?? 'upcoming';
 	const medal = url.searchParams.get('medal') ?? '';
 	const regStatus = url.searchParams.get('reg') ?? '';
 	const myStatus = url.searchParams.get('mine') ?? '';
 
 	const conditions = [];
-	if (category) conditions.push(eq(raceSeries.category, category));
+
+	// Text search
+	if (q) {
+		const pattern = `%${q}%`;
+		conditions.push(or(
+			ilike(raceSeries.name, pattern),
+			ilike(raceSeries.city, pattern),
+			ilike(raceSeries.country, pattern)
+		)!);
+	}
+
+	// Category: 'local' or 'travel' (norway + international)
+	if (category === 'local') conditions.push(eq(raceSeries.category, 'local'));
+	else if (category === 'travel') conditions.push(
+		sql`${raceSeries.category} IN ('norway', 'international')`
+	);
+
+	// Time filter
+	const now = new Date();
+	if (time === 'upcoming') conditions.push(
+		or(gte(raceEditions.raceDate, now), sql`${raceEditions.raceDate} IS NULL`)!
+	);
+	else if (time === 'past') conditions.push(lt(raceEditions.raceDate, now));
+
 	if (regStatus) conditions.push(eq(raceEditions.registrationStatus, regStatus));
 	if (medal) conditions.push(
 		sql`EXISTS (SELECT 1 FROM race_distances WHERE edition_id = ${raceEditions.id} AND medal_status = ${medal})`
@@ -70,7 +95,11 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		.from(raceEditions)
 		.innerJoin(raceSeries, eq(raceEditions.seriesId, raceSeries.id))
 		.where(conditions.length ? and(...conditions) : undefined)
-		.orderBy(desc(raceEditions.firstSeenAt))
+		.orderBy(
+			time === 'past'
+				? desc(raceEditions.raceDate)
+				: asc(raceEditions.raceDate)
+		)
 		.limit(200);
 
 	// Fetch distances for all returned editions in one query
@@ -127,6 +156,6 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	return {
 		events,
 		total: events.length,
-		filters: { category, medal, regStatus, myStatus }
+		filters: { q, category, time, medal, regStatus, myStatus }
 	};
 };

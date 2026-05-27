@@ -3,12 +3,18 @@
 
 	let { data } = $props();
 	let events = $state(data.events);
+	let searchValue = $state(data.filters.q);
 
 	const categories = [
-		{ value: '', label: '🏁 All', emoji: '🏁' },
-		{ value: 'local', label: '🏃 Local', emoji: '🏃' },
-		{ value: 'norway', label: '🧳 Norway', emoji: '🧳' },
-		{ value: 'international', label: '✈️ World', emoji: '✈️' }
+		{ value: '', label: '🏁 All' },
+		{ value: 'local', label: '🏃 Local' },
+		{ value: 'travel', label: '✈️ Travel' }
+	];
+
+	const timeOptions = [
+		{ value: 'upcoming', label: '📅 Upcoming' },
+		{ value: 'past', label: '🕐 Past' },
+		{ value: 'all', label: '🗓️ All time' }
 	];
 
 	const medals = [
@@ -36,7 +42,9 @@
 
 	function buildUrl(overrides: Record<string, string>) {
 		const params = new URLSearchParams({
+			q: data.filters.q,
 			category: data.filters.category,
+			time: data.filters.time,
 			medal: data.filters.medal,
 			reg: data.filters.regStatus,
 			mine: data.filters.myStatus,
@@ -46,6 +54,11 @@
 			if (!v) params.delete(k);
 		}
 		return `/races?${params}`;
+	}
+
+	function submitSearch(e: Event) {
+		e.preventDefault();
+		window.location.href = buildUrl({ q: searchValue });
 	}
 
 </script>
@@ -59,6 +72,17 @@
 		<p class="page-sub">{data.total} events scouted so far</p>
 	</div>
 
+	<!-- Search -->
+	<form class="search-bar" onsubmit={submitSearch}>
+		<input
+			type="text"
+			class="search-input"
+			placeholder="Search by name or city…"
+			bind:value={searchValue}
+		/>
+		<button type="submit" class="search-btn">🔍</button>
+	</form>
+
 	<!-- Filter bar -->
 	<div class="filter-bar hide-scrollbar">
 		{#each categories as cat}
@@ -67,6 +91,15 @@
 				class="filter-chip {data.filters.category === cat.value ? 'active' : ''}"
 			>
 				{cat.label}
+			</a>
+		{/each}
+		<span class="filter-divider"></span>
+		{#each timeOptions as t}
+			<a
+				href={buildUrl({ time: t.value })}
+				class="filter-chip {data.filters.time === t.value ? 'active' : ''}"
+			>
+				{t.label}
 			</a>
 		{/each}
 	</div>
@@ -162,6 +195,46 @@
 		color: #0c0f1a;
 		background: #a3e635;
 		border-color: #a3e635;
+	}
+
+	.filter-divider {
+		width: 1.5px;
+		align-self: stretch;
+		background: rgba(255,255,255,0.1);
+		margin: 0 4px;
+		border-radius: 1px;
+	}
+
+	.search-bar {
+		display: flex;
+		gap: 8px;
+	}
+	.search-input {
+		flex: 1;
+		padding: 10px 14px;
+		border-radius: 12px;
+		font-size: 0.9rem;
+		color: white;
+		background: rgba(255,255,255,0.05);
+		border: 1.5px solid rgba(255,255,255,0.08);
+		outline: none;
+	}
+	.search-input:focus {
+		border-color: rgba(163,230,53,0.4);
+	}
+	.search-input::placeholder {
+		color: #64748b;
+	}
+	.search-btn {
+		padding: 10px 16px;
+		border-radius: 12px;
+		background: rgba(255,255,255,0.07);
+		border: 1.5px solid rgba(255,255,255,0.08);
+		cursor: pointer;
+		font-size: 1rem;
+	}
+	.search-btn:hover {
+		background: rgba(255,255,255,0.12);
 	}
 
 	.dropdown-row {

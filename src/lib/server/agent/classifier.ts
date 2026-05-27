@@ -141,7 +141,6 @@ export async function classifyRacesBatched(
 
 		const { object, usage } = await generateObject({
 			model: getModel(),
-			mode: 'json',
 			system: SYSTEM_PROMPT(),
 			prompt,
 			schema: raceSchema,

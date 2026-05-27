@@ -102,7 +102,6 @@ export async function deduplicateRaces(
 	try {
 		const { object } = await generateObject({
 			model: getModel(),
-			mode: 'json',
 			system: DEDUP_PROMPT,
 			prompt: raceList,
 			schema: dedupeSchema,

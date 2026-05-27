@@ -17,8 +17,6 @@ import { env } from '$env/dynamic/private';
 import { eq, gte, and, isNull, isNotNull, sql } from 'drizzle-orm';
 import type { ClassifiedRace } from './types';
 import { classifyRacesBatched } from './classifier';
-import { deduplicateRaces } from './dedup';
-import { enrichRaces } from './enrichment';
 import { scrapeRaceResults, searchAllTimingProviders } from './results';
 import { scrapeEqTiming } from './sources/eqtiming';
 import { scrapeSportsTiming } from './sources/sportstiming';
@@ -425,72 +423,48 @@ export async function runAgent(
 			onLog(`Skipped ${beforeDedup - leads.length} already-known races → ${leads.length} new leads for LLM`);
 		}
 
-		// ── Classify and enrich with LLM ──────────────────────────────────────
+		// ── Classify, insert immediately per batch ────────────────────────────
 		onLog(`Classifying ${leads.length} leads with ${env.LLM_MODEL ?? 'gpt-4o-mini'}…`);
-		const { classified, tokensIn, tokensOut, costUsd } = await classifyRaces(leads);
-		onLog(`LLM returned ${classified.length} qualifying races (${tokensIn + tokensOut} tokens, $${costUsd.toFixed(4)})`);
-		totalTokensIn = tokensIn;
-		totalTokensOut = tokensOut;
-		totalCost = costUsd;
 
-		// ── Deduplicate: LLM identifies same races with different names ───────
-		const deduped = await deduplicateRaces(classified, onLog);
-
-		// ── Split into new vs known races to avoid re-enriching what we have ──
 		const knownFingerprints = new Set(
 			(await db.select({ fp: raceEditions.editionFingerprint }).from(raceEditions))
 				.map((r) => r.fp)
 		);
 
-		const newRaces: typeof deduped = [];
-		const knownRaces: typeof deduped = [];
-		for (const race of deduped) {
-			const eventName = race.eventName ?? race.name;
-			const year = race.raceDate ? race.raceDate.getFullYear() : null;
-			const ef = makeEditionFingerprint(eventName, race.city, year);
-			if (knownFingerprints.has(ef)) {
-				knownRaces.push(race);
-			} else {
-				newRaces.push(race);
-			}
-		}
-		if (knownRaces.length > 0) onLog(`⚡ ${knownRaces.length} known races — skipping enrichment, updating status only`);
-		if (newRaces.length > 0) onLog(`✨ ${newRaces.length} new races — running full enrichment`);
-
-		// ── Enrich new races only (visit official pages for dates, medals, images)
-		const enriched = newRaces.length > 0 ? await enrichRaces(newRaces, onLog) : [];
-
-		// ── Auto-discover results URLs for new races only ─────────────────────
-		const needsResultsUrl = enriched.filter(r => !r.resultsUrl);
-		if (needsResultsUrl.length > 0) {
-			onLog(`🔍 Searching timing providers for ${needsResultsUrl.length} races without results URL…`);
-			for (const race of needsResultsUrl) {
-				const url = await searchAllTimingProviders(race.name, race.raceDate, onLog);
-				if (url) race.resultsUrl = url;
-			}
-		}
-
-		// Known races go straight to upsert (registration status update only)
-		const allToUpsert = [...enriched, ...knownRaces];
-
-		// ── Upsert into DB ────────────────────────────────────────────────────
-		onLog('Saving races to database…');
 		let racesNew = 0;
 		let racesUpdated = 0;
+		let totalClassified = 0;
 
-		for (const race of allToUpsert) {
-			const { isNew } = await upsertClassifiedRace(race, onLog);
-			if (isNew) {
-				racesNew++;
-				await incrStat(KEYS.RACES_TOTAL);
-				await incrStat(KEYS.RACES_NEW_24H);
-				if (race.raceDate && new Date(race.raceDate) > new Date()) {
-					await incrStat(KEYS.RACES_UPCOMING);
+		const { tokensIn, tokensOut, costUsd } = await classifyRacesBatched(leads, async (batchRaces, stats) => {
+			totalTokensIn += stats.tokensIn;
+			totalTokensOut += stats.tokensOut;
+			totalCost += stats.costUsd;
+			totalClassified += batchRaces.length;
+			onLog(`  Batch: ${batchRaces.length} races classified (${stats.tokensIn + stats.tokensOut} tokens)`);
+
+			// Immediately upsert each batch
+			for (const race of batchRaces) {
+				const eventName = race.eventName ?? race.name;
+				const year = race.raceDate ? race.raceDate.getFullYear() : null;
+				const ef = makeEditionFingerprint(eventName, race.city, year);
+				const isKnown = knownFingerprints.has(ef);
+
+				const { isNew } = await upsertClassifiedRace(race, onLog);
+				if (isNew) {
+					racesNew++;
+					knownFingerprints.add(ef);
+					await incrStat(KEYS.RACES_TOTAL);
+					await incrStat(KEYS.RACES_NEW_24H);
+					if (race.raceDate && new Date(race.raceDate) > new Date()) {
+						await incrStat(KEYS.RACES_UPCOMING);
+					}
+				} else {
+					racesUpdated++;
 				}
-			} else {
-				racesUpdated++;
 			}
-		}
+		});
+
+		onLog(`LLM done: ${totalClassified} races classified, ${racesNew} new, ${racesUpdated} updated (${totalTokensIn + totalTokensOut} tokens, $${totalCost.toFixed(4)})`);
 
 		// ── Propagate medal confirmations across distances of same edition ────
 		await db.execute(sql`

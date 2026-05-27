@@ -23,9 +23,18 @@ export const actions: Actions = {
 			await auth.api.signUpEmail({ body: { name, email, password } });
 			await incrStat(KEYS.USERS_TOTAL);
 			await incrStat(KEYS.USERS_NEW_24H);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : '';
-			if (msg.toLowerCase().includes('exist')) return fail(400, { message: 'Email already in use' });
+		} catch (err: unknown) {
+			// better-auth may throw an APIError, Response, or plain Error
+			let msg = '';
+			if (err instanceof Error) {
+				msg = err.message;
+			} else if (err && typeof err === 'object' && 'message' in err) {
+				msg = String((err as { message: unknown }).message);
+			}
+			const lower = msg.toLowerCase();
+			if (lower.includes('exist') || lower.includes('already') || lower.includes('unique')) {
+				return fail(400, { message: 'Email already in use' });
+			}
 			return fail(400, { message: 'Registration failed. Please try again.' });
 		}
 

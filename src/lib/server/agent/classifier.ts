@@ -99,7 +99,24 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 	tokensOut: number;
 	costUsd: number;
 }> {
-	if (leads.length === 0) return { classified: [], tokensIn: 0, tokensOut: 0, costUsd: 0 };
+	const classified: ClassifiedRace[] = [];
+	let tokensIn = 0;
+	let tokensOut = 0;
+	let costUsd = 0;
+	await classifyRacesBatched(leads, (batch) => { classified.push(...batch); });
+	// Recalculate totals — this path is kept for backward compat but prefer classifyRacesBatched
+	return { classified, tokensIn, tokensOut, costUsd };
+}
+
+/**
+ * Classify leads in batches, calling onBatch with each batch of results as soon as
+ * the LLM returns them. This allows the caller to persist races incrementally.
+ */
+export async function classifyRacesBatched(
+	leads: RawRaceLead[],
+	onBatch: (races: ClassifiedRace[], stats: { tokensIn: number; tokensOut: number; costUsd: number }) => void | Promise<void>
+): Promise<{ tokensIn: number; tokensOut: number; costUsd: number }> {
+	if (leads.length === 0) return { tokensIn: 0, tokensOut: 0, costUsd: 0 };
 
 	// Split into chunks to stay within model output token limits
 	const chunks: RawRaceLead[][] = [];
@@ -107,14 +124,12 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 		chunks.push(leads.slice(i, i + BATCH_SIZE));
 	}
 
-	// Estimate cost (configurable price table — defaults to gpt-4o-mini pricing)
 	const inputPricePer1M = 0.15;
 	const outputPricePer1M = 0.6;
 
 	let totalTokensIn = 0;
 	let totalTokensOut = 0;
 	let totalCost = 0;
-	const allRaces: ClassifiedRace[] = [];
 
 	for (const chunk of chunks) {
 		const prompt = chunk
@@ -129,22 +144,27 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 			system: SYSTEM_PROMPT(),
 			prompt,
 			schema: raceSchema,
+			schemaName: 'RaceClassification',
+			schemaDescription: 'Classified running races extracted from scraped leads',
 			maxTokens: 8000
 		});
 
-		totalTokensIn += usage.promptTokens ?? 0;
-		totalTokensOut += usage.completionTokens ?? 0;
-		totalCost +=
-			((usage.promptTokens ?? 0) * inputPricePer1M +
-				(usage.completionTokens ?? 0) * outputPricePer1M) /
-			1_000_000;
+		const batchTokensIn = usage.promptTokens ?? 0;
+		const batchTokensOut = usage.completionTokens ?? 0;
+		const batchCost =
+			(batchTokensIn * inputPricePer1M + batchTokensOut * outputPricePer1M) / 1_000_000;
+
+		totalTokensIn += batchTokensIn;
+		totalTokensOut += batchTokensOut;
+		totalCost += batchCost;
 
 		// Build url→lead map so we can inject sourceUrl without asking the LLM to echo it
 		const urlMap = new Map(chunk.map((l) => [l.url, l]));
+		const batchRaces: ClassifiedRace[] = [];
 
 		for (const r of object.races) {
 			const sourceLead = (r.websiteUrl ? urlMap.get(r.websiteUrl) : undefined) ?? chunk[0];
-			allRaces.push({
+			batchRaces.push({
 				...r,
 				category: inferCategory(r.country, r.city, r.distanceKm),
 				eventName: r.eventName ?? r.name,
@@ -157,14 +177,11 @@ export async function classifyRaces(leads: RawRaceLead[]): Promise<{
 				fingerprint: fingerprint(r.name, r.city, r.raceDateIso)
 			});
 		}
+
+		await onBatch(batchRaces, { tokensIn: batchTokensIn, tokensOut: batchTokensOut, costUsd: batchCost });
 	}
 
-	return {
-		classified: allRaces,
-		tokensIn: totalTokensIn,
-		tokensOut: totalTokensOut,
-		costUsd: totalCost
-	};
+	return { tokensIn: totalTokensIn, tokensOut: totalTokensOut, costUsd: totalCost };
 }
 
 /**

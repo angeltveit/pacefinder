@@ -16,7 +16,7 @@ import { incrStat, setHash, KEYS } from '$lib/server/redis';
 import { env } from '$env/dynamic/private';
 import { eq, gte, and, isNull, isNotNull, sql } from 'drizzle-orm';
 import type { ClassifiedRace } from './types';
-import { classifyRaces } from './classifier';
+import { classifyRacesBatched } from './classifier';
 import { deduplicateRaces } from './dedup';
 import { enrichRaces } from './enrichment';
 import { scrapeRaceResults, searchAllTimingProviders } from './results';

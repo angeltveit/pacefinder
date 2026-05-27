@@ -743,7 +743,9 @@ async function parseWithLLM(
 			model: getModel(),
 			system: RESULTS_SYSTEM + distanceContext,
 			prompt: tableContent,
-			schema: resultSchema
+			schema: resultSchema,
+			schemaName: 'RaceResults',
+			schemaDescription: 'Extracted race results with runner names and times'
 		});
 
 		if (object.results.length === 0) return null;

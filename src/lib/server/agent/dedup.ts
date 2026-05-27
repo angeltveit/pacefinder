@@ -104,7 +104,9 @@ export async function deduplicateRaces(
 			model: getModel(),
 			system: DEDUP_PROMPT,
 			prompt: raceList,
-			schema: dedupeSchema
+			schema: dedupeSchema,
+			schemaName: 'DeduplicationResult',
+			schemaDescription: 'Groups of duplicate races identified by index'
 		});
 
 		if (object.duplicateGroups.length === 0) {

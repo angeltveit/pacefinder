@@ -29,8 +29,14 @@
 				loading = false;
 				if (res.redirected) window.location.href = res.url;
 				else {
-					const data = await res.json().catch(() => ({}));
-					error = data.message ?? 'Registration failed';
+					try {
+						const data = await res.json();
+						// SvelteKit action responses wrap data in { type, data } or return raw
+						const msg = data?.data?.message ?? data?.message ?? null;
+						error = typeof msg === 'string' ? msg : 'Registration failed';
+					} catch {
+						error = 'Registration failed';
+					}
 				}
 			}}
 		>

@@ -1,8 +1,8 @@
 import { redirect } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { raceSeries, raceEditions, raceUserStatus } from '$lib/server/db/schema';
+import { raceSeries, raceEditions, raceUserStatus, user } from '$lib/server/db/schema';
 import { eq, desc, sql } from 'drizzle-orm';
-import type { PageServerLoad } from './$types';
+import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -48,6 +48,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 				websiteUrl: t.websiteUrl,
 				firstSeenAt: t.firstSeenAt.toISOString()
 			}
-		}))
+		})),
+		userCity: locals.user.city ?? '',
+		userCountry: locals.user.country ?? 'NO'
 	};
+};
+
+export const actions: Actions = {
+	updateLocation: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		const form = await request.formData();
+		const city = (form.get('city') as string)?.trim() || null;
+		const country = (form.get('country') as string)?.trim().toUpperCase() || null;
+
+		await db.update(user).set({ city, country }).where(eq(user.id, locals.user.id));
+		return { success: true };
+	}
 };

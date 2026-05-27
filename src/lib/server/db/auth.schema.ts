@@ -10,6 +10,8 @@ export const user = pgTable('user', {
 	updatedAt: timestamp('updated_at').notNull().defaultNow(),
 	// Custom fields
 	role: text('role').notNull().default('member'), // 'member' | 'admin'
+	city: text('city'),
+	country: text('country').default('NO'),
 	isBlocked: boolean('is_blocked').notNull().default(false),
 	blockedAt: timestamp('blocked_at'),
 	blockedBy: text('blocked_by')

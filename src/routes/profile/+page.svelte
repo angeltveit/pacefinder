@@ -44,7 +44,22 @@
 
 <div class="profile-wrap">
 	<div class="profile-header">
-		<h1 class="profile-title">My Races</h1>
+		<h1 class="profile-title">My Profile</h1>
+	</div>
+
+	<!-- Location settings -->
+	<form class="location-form" method="POST" action="?/updateLocation">
+		<h2 class="section-label">📍 My Location</h2>
+		<div class="location-fields">
+			<input type="text" name="city" placeholder="City (e.g. Oslo)" value={data.userCity} class="loc-input" />
+			<input type="text" name="country" placeholder="Country code (e.g. NO)" value={data.userCountry} maxlength="2" class="loc-input loc-country" />
+			<button type="submit" class="loc-save">Save</button>
+		</div>
+		<p class="loc-hint">Used to personalize "Local" vs "Travel" in the race feed</p>
+	</form>
+
+	<div class="profile-header">
+		<h2 class="profile-title">My Races</h2>
 		<span class="profile-count">{data.triaged.length} triaged</span>
 	</div>
 
@@ -215,5 +230,60 @@
 		white-space: nowrap;
 		flex-shrink: 0;
 		padding-top: 2px;
+	}
+
+	.location-form {
+		background: rgba(255,255,255,0.03);
+		border: 1.5px solid rgba(255,255,255,0.08);
+		border-radius: 16px;
+		padding: 20px;
+	}
+	.section-label {
+		font-size: 0.95rem;
+		font-weight: 700;
+		color: #f1f5f9;
+		margin: 0 0 12px;
+	}
+	.location-fields {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.loc-input {
+		flex: 1;
+		min-width: 120px;
+		padding: 10px 14px;
+		border-radius: 10px;
+		font-size: 0.85rem;
+		color: white;
+		background: rgba(255,255,255,0.05);
+		border: 1.5px solid rgba(255,255,255,0.1);
+		outline: none;
+	}
+	.loc-input:focus {
+		border-color: rgba(163,230,53,0.4);
+	}
+	.loc-country {
+		flex: 0 0 80px;
+		min-width: 80px;
+		text-transform: uppercase;
+	}
+	.loc-save {
+		padding: 10px 20px;
+		border-radius: 10px;
+		font-size: 0.85rem;
+		font-weight: 700;
+		color: #0c0f1a;
+		background: #a3e635;
+		border: none;
+		cursor: pointer;
+	}
+	.loc-save:hover {
+		background: #bef264;
+	}
+	.loc-hint {
+		margin: 8px 0 0;
+		font-size: 0.75rem;
+		color: rgba(255,255,255,0.35);
 	}
 </style>

@@ -171,7 +171,7 @@
 	.filter-bar {
 		display: flex;
 		gap: 8px;
-		overflow-x: auto;
+		flex-wrap: wrap;
 		padding: 4px 0;
 	}
 	.filter-chip {

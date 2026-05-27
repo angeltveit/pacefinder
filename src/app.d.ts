@@ -8,6 +8,8 @@ declare global {
 				name: string;
 				email: string;
 				role: string;
+				city: string | null;
+				country: string | null;
 				isBlocked: boolean;
 			};
 			session?: import('better-auth/minimal').Session;

@@ -24,10 +24,11 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		)!);
 	}
 
-	// Category: 'local' or 'travel' (norway + international)
-	if (category === 'local') conditions.push(eq(raceSeries.category, 'local'));
+	// Category: 'local' = same country as user, 'travel' = different country
+	const userCountry = locals.user?.country ?? 'NO';
+	if (category === 'local') conditions.push(eq(raceSeries.country, userCountry));
 	else if (category === 'travel') conditions.push(
-		sql`${raceSeries.category} IN ('norway', 'international')`
+		sql`${raceSeries.country} != ${userCountry}`
 	);
 
 	// Time filter
@@ -96,6 +97,8 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		.innerJoin(raceSeries, eq(raceEditions.seriesId, raceSeries.id))
 		.where(conditions.length ? and(...conditions) : undefined)
 		.orderBy(
+			// User's country first, then by date
+			sql`CASE WHEN ${raceSeries.country} = ${userCountry} THEN 0 ELSE 1 END`,
 			time === 'past'
 				? desc(raceEditions.raceDate)
 				: asc(raceEditions.raceDate)

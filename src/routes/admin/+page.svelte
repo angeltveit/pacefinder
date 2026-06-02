@@ -212,6 +212,43 @@
 		}
 	}
 
+	// ── Geocode all series ────────────────────────────────────────────────────
+	let geocoding = $state(false);
+	let geocodeLogs = $state<string[]>([]);
+	let geocodeResult = $state('');
+
+	async function geocodeAll() {
+		geocoding = true;
+		geocodeLogs = [];
+		geocodeResult = '';
+		try {
+			const res = await fetch('/api/admin/races/geocode-all', { method: 'POST' });
+			const reader = res.body!.getReader();
+			let buf = '';
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buf += new TextDecoder().decode(value, { stream: true });
+				const parts = buf.split('\n\n');
+				buf = parts.pop() ?? '';
+				for (const part of parts) {
+					const line = part.startsWith('data: ') ? part.slice(6) : null;
+					if (!line) continue;
+					try {
+						const evt = JSON.parse(line);
+						if (evt.type === 'log') geocodeLogs = [...geocodeLogs, evt.message];
+						else if (evt.type === 'done') geocodeResult = `✓ ${evt.updated} geocoded, ${evt.failed} failed`;
+						else if (evt.type === 'error') geocodeResult = `✗ ${evt.error}`;
+					} catch { /* ignore */ }
+				}
+			}
+		} catch {
+			geocodeResult = '✗ Request failed';
+		} finally {
+			geocoding = false;
+		}
+	}
+
 	// ── Add race by name (LLM web search + import) ────────────────────────────
 	let importName = $state('');
 	let importing = $state(false);
@@ -378,6 +415,34 @@
 					<div>{line}</div>
 				{/each}
 				{#if scraping}
+					<div class="animate-pulse text-slate-500">_</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
+
+	<!-- Geocode all series -->
+	<div class="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+		<h2 class="mb-1 font-semibold text-slate-100">Backfill Coordinates</h2>
+		<p class="mb-3 text-sm text-slate-400">Geocodes every race series that is missing lat/lng coordinates. Required for the distance-based "For You" feed to show results. Respects Nominatim's 1 req/s limit — may take a while for large backlogs.</p>
+		<div class="flex items-center gap-3">
+			<button
+				onclick={geocodeAll}
+				disabled={geocoding}
+				class="whitespace-nowrap rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60"
+			>
+				{geocoding ? 'Geocoding…' : '📍 Geocode All'}
+			</button>
+			{#if geocodeResult}
+				<span class="text-sm {geocodeResult.startsWith('✓') ? 'text-green-400' : 'text-red-400'}">{geocodeResult}</span>
+			{/if}
+		</div>
+		{#if geocodeLogs.length > 0 || geocoding}
+			<div class="mt-3 max-h-48 overflow-y-auto rounded-xl bg-slate-900 p-3 font-mono text-xs text-slate-300">
+				{#each geocodeLogs as line}
+					<div>{line}</div>
+				{/each}
+				{#if geocoding}
 					<div class="animate-pulse text-slate-500">_</div>
 				{/if}
 			</div>

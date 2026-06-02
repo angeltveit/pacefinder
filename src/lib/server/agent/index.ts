@@ -13,6 +13,7 @@ import {
 	user
 } from '$lib/server/db/schema';
 import { incrStat, setHash, KEYS } from '$lib/server/redis';
+import { forwardGeocode } from '$lib/server/geo';
 import { env } from '$env/dynamic/private';
 import { eq, gte, and, isNull, isNotNull, sql } from 'drizzle-orm';
 import type { ClassifiedRace } from './types';
@@ -70,6 +71,10 @@ export async function upsertClassifiedRace(
 
 	let seriesId: string;
 	if (!existingSeries) {
+		// Geocode the city so the distance-based feed can rank this series.
+		const geoQuery = race.country ? `${race.city}, ${race.country}` : race.city;
+		const geo = await forwardGeocode(geoQuery);
+		if (!geo) onLog(`  ⚠ Could not geocode "${geoQuery}"`);
 		const [inserted] = await db
 			.insert(raceSeries)
 			.values({
@@ -77,6 +82,8 @@ export async function upsertClassifiedRace(
 				category: race.category,
 				city: race.city,
 				country: race.country,
+				lat: geo?.lat ?? null,
+				lng: geo?.lng ?? null,
 				websiteUrl: race.websiteUrl,
 				imageUrl: race.imageUrl,
 				whyItFits: race.whyItFits,
@@ -86,12 +93,23 @@ export async function upsertClassifiedRace(
 		seriesId = inserted.id;
 	} else {
 		seriesId = existingSeries.id;
+		// Backfill coordinates if missing on an existing series.
+		let lat = existingSeries.lat;
+		let lng = existingSeries.lng;
+		if (lat == null || lng == null) {
+			const geoQuery = race.country ? `${race.city}, ${race.country}` : race.city;
+			const geo = await forwardGeocode(geoQuery);
+			if (geo) { lat = geo.lat; lng = geo.lng; }
+			else onLog(`  ⚠ Could not geocode "${geoQuery}"`);
+		}
 		await db
 			.update(raceSeries)
 			.set({
 				websiteUrl: race.websiteUrl ?? existingSeries.websiteUrl,
 				imageUrl: race.imageUrl ?? existingSeries.imageUrl,
 				whyItFits: race.whyItFits || existingSeries.whyItFits,
+				lat: lat ?? existingSeries.lat,
+				lng: lng ?? existingSeries.lng,
 				lastUpdatedAt: new Date()
 			})
 			.where(eq(raceSeries.id, seriesId));

@@ -1,43 +1,48 @@
 <script lang="ts">
 	import RaceCard from '$lib/components/RaceCard.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 
 	let { data } = $props();
 	let events = $state(data.events);
 	let searchValue = $state(data.filters.q);
 
+	// Re-sync local state when SvelteKit re-runs the load after filter navigation.
+	$effect(() => { events = data.events; });
+	$effect(() => { searchValue = data.filters.q; });
+
 	const categories = [
-		{ value: '', label: '🏁 All' },
-		{ value: 'local', label: '🏃 Local' },
-		{ value: 'travel', label: '✈️ Travel' }
+		{ value: '', label: 'All races' },
+		{ value: 'local', label: 'Local' },
+		{ value: 'travel', label: 'Travel' }
 	];
 
 	const timeOptions = [
-		{ value: 'upcoming', label: '📅 Upcoming' },
-		{ value: 'past', label: '🕐 Past' },
-		{ value: 'all', label: '🗓️ All time' }
+		{ value: 'upcoming', label: 'Upcoming' },
+		{ value: 'past', label: 'Past' },
+		{ value: 'all', label: 'All time' }
 	];
 
 	const medals = [
 		{ value: '', label: 'Any medal' },
-		{ value: 'confirmed', label: '🏅 Confirmed' },
-		{ value: 'likely', label: '🥈 Likely' },
-		{ value: 'unclear', label: '❓ Unclear' }
+		{ value: 'confirmed', label: 'Medal confirmed' },
+		{ value: 'likely', label: 'Medal likely' },
+		{ value: 'unclear', label: 'Medal unclear' }
 	];
 
 	const regStatuses = [
-		{ value: '', label: 'Any' },
-		{ value: 'open', label: '🟢 Open' },
-		{ value: 'opening_soon', label: '⏰ Soon' },
-		{ value: 'unknown', label: '❓ Unknown' },
-		{ value: 'closed', label: '🔒 Closed' }
+		{ value: '', label: 'Any status' },
+		{ value: 'open', label: 'Registration open' },
+		{ value: 'opening_soon', label: 'Opening soon' },
+		{ value: 'unknown', label: 'Status unknown' },
+		{ value: 'closed', label: 'Closed' }
 	];
 
 	const myStatuses = [
 		{ value: '', label: 'All' },
-		{ value: 'interested', label: '❤️ Tracked' },
-		{ value: 'following', label: '🔔 Following' },
-		{ value: 'seen', label: '👁 Seen' },
-		{ value: 'skip', label: '✕ Skipped' }
+		{ value: 'interested', label: 'Tracked' },
+		{ value: 'following', label: 'Following' },
+		{ value: 'seen', label: 'Seen' },
+		{ value: 'skip', label: 'Skipped' }
 	];
 
 	function buildUrl(overrides: Record<string, string>) {
@@ -63,24 +68,25 @@
 
 </script>
 
-<svelte:head><title>Browse Races — PaceFinder</title></svelte:head>
+<svelte:head><title>Explore Races — PaceFinder</title></svelte:head>
 
 <div class="page">
 	<!-- Header -->
-	<div class="header">
-		<h1 class="page-title">🏁 Browse all events</h1>
-		<p class="page-sub">{data.total} events scouted so far</p>
+	<div class="header pf-rise">
+		<h1 class="page-title">Explore every race</h1>
+		<p class="page-sub">{data.total} events scouted across the Nordics and beyond</p>
 	</div>
 
 	<!-- Search -->
 	<form class="search-bar" onsubmit={submitSearch}>
+		<span class="search-ic"><Icon name="search" size={18} /></span>
 		<input
 			type="text"
 			class="search-input"
-			placeholder="Search by name or city…"
+			placeholder="Search by race name or city…"
 			bind:value={searchValue}
 		/>
-		<button type="submit" class="search-btn">🔍</button>
+		<button type="submit" class="search-btn">Search</button>
 	</form>
 
 	<!-- Filter bar -->
@@ -139,12 +145,13 @@
 	<!-- Event list -->
 	{#if events.length === 0}
 		<div class="empty-state">
-			<p>Nothing matches these filters. Try loosening up! 🤷</p>
+			<Icon name="search" size={26} />
+			<p>Nothing matches these filters. Try loosening them up.</p>
 		</div>
 	{:else}
-		<div class="feed">
-			{#each events as event (event.primaryId)}
-				<RaceCard {event} user={data.user} onDelete={(id: string) => events = events.filter(e => e.primaryId !== id)} />
+		<div class="grid">
+			{#each events as event, i (event.primaryId)}
+				<RaceCard {event} user={data.user} index={i} onDelete={(id: string) => events = events.filter(e => e.primaryId !== id)} />
 			{/each}
 		</div>
 	{/if}
@@ -154,87 +161,100 @@
 	.page {
 		display: flex;
 		flex-direction: column;
-		gap: 16px;
+		gap: 18px;
 	}
-	.header { text-align: center; padding-top: 8px; }
+	.header { padding-top: 4px; }
 	.page-title {
-		font-size: 1.5rem;
-		font-weight: 900;
-		color: white;
+		font-family: var(--font-display);
+		font-size: clamp(1.7rem, 5vw, 2.3rem);
+		font-weight: 700;
+		letter-spacing: -0.02em;
+		color: var(--text-strong);
+		line-height: 1.05;
 	}
 	.page-sub {
-		font-size: 0.85rem;
-		color: #64748b;
-		margin-top: 4px;
-	}
-
-	.filter-bar {
-		display: flex;
-		gap: 8px;
-		flex-wrap: wrap;
-		padding: 4px 0;
-	}
-	.filter-chip {
-		flex-shrink: 0;
-		padding: 10px 18px;
-		border-radius: 14px;
-		font-size: 0.85rem;
-		font-weight: 700;
-		color: #94a3b8;
-		background: rgba(255,255,255,0.05);
-		border: 1.5px solid rgba(255,255,255,0.08);
-		text-decoration: none;
-		transition: all 0.15s;
-		white-space: nowrap;
-	}
-	.filter-chip:hover {
-		color: white;
-		background: rgba(255,255,255,0.09);
-	}
-	.filter-chip.active {
-		color: #0c0f1a;
-		background: #a3e635;
-		border-color: #a3e635;
-	}
-
-	.filter-divider {
-		width: 1.5px;
-		align-self: stretch;
-		background: rgba(255,255,255,0.1);
-		margin: 0 4px;
-		border-radius: 1px;
+		font-size: 0.92rem;
+		color: var(--text-muted);
+		margin-top: 6px;
 	}
 
 	.search-bar {
 		display: flex;
+		align-items: center;
 		gap: 8px;
+		background: var(--color-surface);
+		border: 1px solid var(--line);
+		border-radius: var(--r-md);
+		padding: 6px 6px 6px 14px;
+		transition: border-color 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out);
 	}
+	.search-bar:focus-within {
+		border-color: color-mix(in srgb, var(--color-brand) 45%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 12%, transparent);
+	}
+	.search-ic { color: var(--text-faint); display: flex; flex-shrink: 0; }
 	.search-input {
 		flex: 1;
-		padding: 10px 14px;
-		border-radius: 12px;
-		font-size: 0.9rem;
-		color: white;
-		background: rgba(255,255,255,0.05);
-		border: 1.5px solid rgba(255,255,255,0.08);
+		padding: 8px 4px;
+		font-size: 0.95rem;
+		color: var(--text-strong);
+		background: transparent;
+		border: none;
 		outline: none;
 	}
-	.search-input:focus {
-		border-color: rgba(163,230,53,0.4);
-	}
-	.search-input::placeholder {
-		color: #64748b;
-	}
+	.search-input::placeholder { color: var(--text-faint); }
 	.search-btn {
-		padding: 10px 16px;
-		border-radius: 12px;
-		background: rgba(255,255,255,0.07);
-		border: 1.5px solid rgba(255,255,255,0.08);
+		flex-shrink: 0;
+		padding: 9px 18px;
+		border-radius: var(--r-sm);
+		background: var(--color-brand);
+		color: #0a0e17;
+		border: none;
+		font-family: var(--font-sans);
+		font-size: 0.85rem;
+		font-weight: 700;
 		cursor: pointer;
-		font-size: 1rem;
+		transition: background 0.15s, transform 0.15s var(--ease-spring);
 	}
-	.search-btn:hover {
-		background: rgba(255,255,255,0.12);
+	.search-btn:hover { background: var(--color-brand-bright); }
+	.search-btn:active { transform: scale(0.96); }
+
+	.filter-bar {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		overflow-x: auto;
+		padding: 2px 0;
+	}
+	.filter-chip {
+		flex-shrink: 0;
+		padding: 9px 16px;
+		border-radius: 999px;
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: var(--text-muted);
+		background: var(--color-surface);
+		border: 1px solid var(--line);
+		text-decoration: none;
+		transition: all 0.15s var(--ease-out);
+		white-space: nowrap;
+	}
+	.filter-chip:hover {
+		color: var(--text-strong);
+		border-color: var(--line-strong);
+	}
+	.filter-chip.active {
+		color: #0a0e17;
+		background: var(--color-brand);
+		border-color: var(--color-brand);
+	}
+
+	.filter-divider {
+		width: 1px;
+		align-self: stretch;
+		background: var(--line-strong);
+		margin: 4px 4px;
+		flex-shrink: 0;
 	}
 
 	.dropdown-row {
@@ -244,60 +264,43 @@
 	}
 	.filter-select {
 		flex: 1;
-		min-width: 100px;
+		min-width: 130px;
 		padding: 10px 14px;
-		border-radius: 12px;
-		font-size: 0.82rem;
+		border-radius: var(--r-sm);
+		font-family: var(--font-sans);
+		font-size: 0.85rem;
 		font-weight: 600;
-		color: #94a3b8;
-		background: rgba(255,255,255,0.05);
-		border: 1.5px solid rgba(255,255,255,0.08);
+		color: var(--text);
+		background: var(--color-surface);
+		border: 1px solid var(--line);
 		cursor: pointer;
+		transition: border-color 0.15s;
 	}
 	.filter-select:focus {
 		outline: none;
-		border-color: rgba(163,230,53,0.4);
+		border-color: color-mix(in srgb, var(--color-brand) 45%, transparent);
 	}
+	.filter-select option { background: var(--color-surface-2); color: var(--text); }
 
-	.feed {
-		display: flex;
-		flex-direction: column;
-		gap: 16px;
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+		gap: 18px;
+	}
+	@media (max-width: 640px) {
+		.grid { grid-template-columns: 1fr; }
 	}
 
 	.empty-state {
-		text-align: center;
-		padding: 48px 16px;
-		border-radius: 1.25rem;
-		border: 2px dashed rgba(255,255,255,0.06);
-		color: #64748b;
-		font-size: 0.95rem;
-	}
-
-	.pagination {
 		display: flex;
+		flex-direction: column;
 		align-items: center;
-		justify-content: center;
 		gap: 12px;
-		padding: 16px 0;
-	}
-	.page-btn {
-		padding: 10px 20px;
-		border-radius: 12px;
-		font-size: 0.85rem;
-		font-weight: 700;
-		color: white;
-		background: rgba(255,255,255,0.07);
-		border: 1.5px solid rgba(255,255,255,0.1);
-		text-decoration: none;
-		transition: all 0.15s;
-	}
-	.page-btn:hover {
-		background: rgba(255,255,255,0.12);
-	}
-	.page-info {
-		font-size: 0.82rem;
-		color: #64748b;
-		font-weight: 600;
+		text-align: center;
+		padding: 56px 16px;
+		border-radius: var(--r-lg);
+		border: 1px dashed var(--line-strong);
+		color: var(--text-faint);
+		font-size: 0.95rem;
 	}
 </style>

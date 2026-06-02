@@ -5,10 +5,50 @@
 	let { children, data } = $props();
 </script>
 
-<div class="min-h-screen font-sans" style="background:#0c0f1a;">
+<div class="app-shell">
 	<Navbar user={data?.user ?? null} />
-	<main class="mx-auto max-w-lg px-4 pb-24 pt-6">
+	<main class="app-main">
 		{@render children()}
 	</main>
+	<footer class="app-footer">
+		<span>PaceFinder</span>
+		<span class="dot">·</span>
+		<span>Your race scout for the Nordics & beyond</span>
+	</footer>
 </div>
+
+<style>
+	.app-shell {
+		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
+	}
+	.app-main {
+		flex: 1;
+		width: 100%;
+		max-width: 1180px;
+		margin: 0 auto;
+		padding: 24px 20px 96px;
+	}
+	.app-footer {
+		max-width: 1180px;
+		margin: 0 auto;
+		width: 100%;
+		padding: 28px 20px 40px;
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		font-size: 0.8rem;
+		color: var(--text-faint);
+		border-top: 1px solid var(--line);
+	}
+	.app-footer .dot {
+		opacity: 0.5;
+	}
+	@media (max-width: 640px) {
+		.app-main {
+			padding: 16px 14px 90px;
+		}
+	}
+</style>
 

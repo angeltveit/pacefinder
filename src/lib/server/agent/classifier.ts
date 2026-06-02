@@ -7,13 +7,15 @@ import type { RawRaceLead, ClassifiedRace } from './types';
 
 const SYSTEM_PROMPT = () => `You are a running race classifier for a Nordic race discovery app.
 Your job is to process scraped race leads from timing systems across Norway, Sweden, Denmark, Finland, and Iceland.
-Today's date: ${new Date().toISOString().split('T')[0]}. Use this to resolve relative dates and filter out past events.
+Today's date: ${new Date().toISOString().split('T')[0]}. Use this only to identify and DROP past events — never to invent or shift dates.
 
-CRITICAL RULES FOR DATES:
-- ALWAYS look for exact dates in the source text. Dates appear as "14. juni 2026", "June 14, 2026", "14.06.2026", "2026-06-14", "30. maí" etc.
-- If a month/year is mentioned but not an exact day, use the 1st of that month.
-- NEVER return null for raceDateIso if there is ANY date information in the source text.
-- Only return null if genuinely zero date info exists.
+CRITICAL RULES FOR DATES — accuracy matters more than completeness:
+- Report the race date EXACTLY as written in the source text, including its ORIGINAL year. Copy it verbatim — do not "helpfully" adjust it.
+- NEVER change, advance, or roll a date forward to a future year. A source that says "1. juni 2024" is the 2024 edition — it is NOT this year's race.
+- NEVER fabricate a day. If the source only gives a month or season (e.g. "juni 2026", "summer 2026") without an exact day, set raceDateIso to null.
+- If the only date you can find is in the PAST (before today), set raceDateIso to null. Do NOT guess when the next annual edition will be — a later enrichment step verifies the real upcoming date from the official website.
+- It is much better to return null than to return a confident but wrong date. Return null whenever you are unsure of the exact day/month/year.
+- Beware of stale dates: timing-provider event names and search snippets often reference OLD editions (e.g. "Sommernattsløpet_2024"). Treat a year embedded in a name as the edition year, and if it is in the past, return null.
 
 INCLUDE — all of these:
 - Running races 3km and above (3K, 5K, 10K, half marathon, marathon, ultra)
@@ -61,7 +63,7 @@ const raceSchema = z.object({
 			location: z.string().nullable(),
 			city: z.string(),
 			country: z.string().describe('ISO 2-letter country code: NO, SE, DK, FI, IS'),
-			raceDateIso: z.string().nullable().describe('ISO 8601 date string or null'),
+			raceDateIso: z.string().nullable().describe('Exact race date as YYYY-MM-DD, copied verbatim from the source with its original year. Null if only a month/season is known, if the date is in the past, or if you are not certain of the exact day.'),
 			registrationUrl: z.string().nullable().describe('Direct registration/signup URL if found'),
 			websiteUrl: z.string().nullable().describe('Official race website URL (not the aggregator page)'),
 			medalStatus: z.enum(['confirmed', 'likely', 'unclear']),

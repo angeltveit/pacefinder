@@ -56,7 +56,7 @@ function makeEditionFingerprint(eventName: string, city: string, year: number | 
 export async function upsertClassifiedRace(
 	race: ClassifiedRace,
 	onLog: (msg: string) => void = () => {}
-): Promise<{ isNew: boolean }> {
+): Promise<{ isNew: boolean; editionId: string; primaryDistanceId: string | null }> {
 	const eventName = race.eventName ?? race.name;
 	const year = race.raceDate ? race.raceDate.getFullYear() : null;
 	const sf = makeSeriesFingerprint(eventName, race.city);
@@ -113,9 +113,16 @@ export async function upsertClassifiedRace(
 				raceDate: race.raceDate,
 				location: race.location,
 				registrationStatus: race.registrationStatus,
+				registrationDeadline: race.registrationDeadline ?? null,
+				priceMin: race.priceMin ?? null,
+				priceMax: race.priceMax ?? null,
+				priceCurrency: race.priceCurrency ?? 'NOK',
+				fieldSize: race.fieldSize ?? null,
+				confidence: race.confidence ?? 0.5,
 				websiteUrl: race.websiteUrl,
 				sourceUrl: race.sourceUrl,
 				rawLlmOutput: race.rawLlmOutput,
+				raceDayInfo: race.raceDayInfo ?? null,
 				editionFingerprint: ef
 			})
 			.returning({ id: raceEditions.id });
@@ -127,8 +134,15 @@ export async function upsertClassifiedRace(
 			.set({
 				registrationStatus: race.registrationStatus,
 				raceDate: race.raceDate ?? existingEdition.raceDate,
+				registrationDeadline: race.registrationDeadline ?? existingEdition.registrationDeadline,
+				priceMin: race.priceMin ?? existingEdition.priceMin,
+				priceMax: race.priceMax ?? existingEdition.priceMax,
+				priceCurrency: race.priceCurrency ?? existingEdition.priceCurrency,
+				fieldSize: race.fieldSize ?? existingEdition.fieldSize,
+				confidence: race.confidence ?? existingEdition.confidence,
 				websiteUrl: race.websiteUrl ?? existingEdition.websiteUrl,
 				sourceUrl: race.sourceUrl ?? existingEdition.sourceUrl,
+				raceDayInfo: race.raceDayInfo ?? existingEdition.raceDayInfo,
 				lastUpdatedAt: new Date()
 			})
 			.where(eq(raceEditions.id, editionId));
@@ -146,6 +160,8 @@ export async function upsertClassifiedRace(
 			: [{ km: race.distanceKm, name: race.name }];
 
 	let anyNew = false;
+	// Track each distance row so we can return a "primary" (lowest-km) id for deep links.
+	const upsertedDistances: Array<{ id: string; km: number | null }> = [];
 	for (const { km, name } of distancesToUpsert) {
 		const existingDist = await db.query.raceDistances.findFirst({
 			where: and(
@@ -157,14 +173,20 @@ export async function upsertClassifiedRace(
 		});
 
 		if (!existingDist) {
-			await db.insert(raceDistances).values({
-				editionId,
-				name,
-				distanceKm: km,
-				registrationUrl: race.registrationUrl,
-				resultsUrl: race.resultsUrl,
-				medalStatus: race.medalStatus
-			});
+			const [insertedDist] = await db
+				.insert(raceDistances)
+				.values({
+					editionId,
+					name,
+					distanceKm: km,
+					elevationGainM: race.elevationGainM ?? null,
+					surface: race.surface ?? null,
+					registrationUrl: race.registrationUrl,
+					resultsUrl: race.resultsUrl,
+					medalStatus: race.medalStatus
+				})
+				.returning({ id: raceDistances.id });
+			upsertedDistances.push({ id: insertedDist.id, km });
 			onLog(`  + new: ${name} (${race.city})`);
 			anyNew = true;
 		} else {
@@ -177,10 +199,19 @@ export async function upsertClassifiedRace(
 					lastUpdatedAt: new Date()
 				})
 				.where(eq(raceDistances.id, existingDist.id));
+			upsertedDistances.push({ id: existingDist.id, km });
 		}
 	}
 
-	return { isNew: anyNew };
+	// Primary distance = lowest km (nulls last) — used for deep-linking to the race.
+	const primaryDistanceId =
+		upsertedDistances.length > 0
+			? upsertedDistances.reduce((best, d) =>
+					(d.km ?? Infinity) < (best.km ?? Infinity) ? d : best
+				).id
+			: null;
+
+	return { isNew: anyNew, editionId, primaryDistanceId };
 }
 
 async function checkMonthlyBudget(onLog: (msg: string) => void): Promise<void> {

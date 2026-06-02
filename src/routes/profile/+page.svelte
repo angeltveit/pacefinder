@@ -53,9 +53,15 @@
 		<div class="location-fields">
 			<input type="text" name="city" placeholder="City (e.g. Oslo)" value={data.userCity} class="loc-input" />
 			<input type="text" name="country" placeholder="Country code (e.g. NO)" value={data.userCountry} maxlength="2" class="loc-input loc-country" />
+			<select name="gender" value={data.userGender} class="loc-input loc-gender">
+				<option value="">Gender (optional)</option>
+				<option value="male">Male</option>
+				<option value="female">Female</option>
+				<option value="other">Other</option>
+			</select>
 			<button type="submit" class="loc-save">Save</button>
 		</div>
-		<p class="loc-hint">Used to personalize "Local" vs "Travel" in the race feed</p>
+		<p class="loc-hint">Location personalizes "Local" vs "Travel"; gender lets the coach hype you up properly</p>
 	</form>
 
 	<div class="profile-header">

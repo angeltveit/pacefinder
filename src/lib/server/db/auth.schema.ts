@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, text, boolean, timestamp, real, integer, jsonb } from 'drizzle-orm/pg-core';
 
 export const user = pgTable('user', {
 	id: text('id').primaryKey(),
@@ -12,6 +12,20 @@ export const user = pgTable('user', {
 	role: text('role').notNull().default('member'), // 'member' | 'admin'
 	city: text('city'),
 	country: text('country').default('NO'),
+	/** 'male' | 'female' | 'other' — used by the AI coach for personalised nicknames */
+	gender: text('gender'),
+	// ─── Personalization preferences ───
+	/** Home coordinates for distance-based ranking */
+	homeLat: real('home_lat'),
+	homeLng: real('home_lng'),
+	/** How far the runner will travel for a race (km) */
+	travelRadiusKm: integer('travel_radius_km').default(150),
+	/** Preferred distances, e.g. ["half","marathon"] */
+	targetDistances: jsonb('target_distances'),
+	/** 'casual' | 'improver' | 'competitive' */
+	ambition: text('ambition'),
+	/** Set when the user completes onboarding */
+	onboardedAt: timestamp('onboarded_at'),
 	isBlocked: boolean('is_blocked').notNull().default(false),
 	blockedAt: timestamp('blocked_at'),
 	blockedBy: text('blocked_by')

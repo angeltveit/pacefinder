@@ -8,6 +8,21 @@ export interface RawRaceLead {
 	date?: string;
 }
 
+/** Practical "things runners always wonder about" info, extracted by the enrichment agent.
+ *  Each field is a short human-readable string, or null/undefined when not found. */
+export interface RaceDayInfo {
+	/** Venue / start-finish area address or clear location, e.g. "Festplassen, 5014 Bergen". */
+	address?: string | null;
+	/** Start time(s) for distances/waves, e.g. "10K 19:00, 5K 19:15" or "first start 09:00". */
+	startTimes?: string | null;
+	/** Where & when to collect race bibs/numbers. */
+	bibPickup?: string | null;
+	/** Toilets, changing rooms, wardrobe / bag storage. */
+	facilities?: string | null;
+	/** Food, drinks, expo, entertainment, kids races, after-party, other side events. */
+	extras?: string | null;
+}
+
 export interface ClassifiedRace {
 	name: string;
 	eventName: string;
@@ -26,6 +41,17 @@ export interface ClassifiedRace {
 	sourceUrl: string;
 	medalStatus: 'confirmed' | 'likely' | 'unclear';
 	registrationStatus: 'open' | 'opening_soon' | 'unknown' | 'closed';
+	/** Enrichment-extracted facts (optional, populated by the web agent) */
+	registrationDeadline?: Date | null;
+	priceMin?: number | null;
+	priceMax?: number | null;
+	priceCurrency?: string | null;
+	fieldSize?: number | null;
+	confidence?: number | null;
+	elevationGainM?: number | null;
+	surface?: 'road' | 'trail' | 'mixed' | 'track' | null;
+	/** Practical race-day info found by the web agent (address, start times, bib pickup, facilities, extras) */
+	raceDayInfo?: RaceDayInfo | null;
 	whyItFits: string;
 	rawLlmOutput: unknown;
 	fingerprint: string;

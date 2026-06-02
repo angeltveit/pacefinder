@@ -23,6 +23,11 @@ export const auth = betterAuth({
 				required: true,
 				defaultValue: false,
 				input: false
+			},
+			gender: {
+				type: 'string',
+				required: false,
+				input: false
 			}
 		}
 	},

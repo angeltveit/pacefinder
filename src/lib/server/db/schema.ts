@@ -29,6 +29,8 @@ export const raceSeries = pgTable('race_series', {
 	/** Series-level website (may be overridden per edition) */
 	websiteUrl: text('website_url'),
 	imageUrl: text('image_url'),
+	/** Locally cached/proxied hero image (filled by enrichment to avoid hotlink blocks) */
+	heroImageCachedUrl: text('hero_image_cached_url'),
 	whyItFits: text('why_it_fits'),
 	/** Deduplication key: slugified name+city */
 	seriesFingerprint: text('series_fingerprint').notNull().unique(),
@@ -51,10 +53,23 @@ export const raceEditions = pgTable('race_editions', {
 	location: text('location'),
 	/** 'open' | 'opening_soon' | 'unknown' | 'closed' */
 	registrationStatus: text('registration_status').notNull().default('unknown'),
+	/** When registration closes (extracted from official page when available) */
+	registrationDeadline: timestamp('registration_deadline'),
+	/** Entry price range in the listed currency */
+	priceMin: real('price_min'),
+	priceMax: real('price_max'),
+	priceCurrency: text('price_currency').default('NOK'),
+	/** Capacity / typical field size if published */
+	fieldSize: integer('field_size'),
+	/** Extraction confidence 0–1 from the LLM enrichment pass */
+	confidence: real('confidence').default(0.5),
 	/** Edition-specific website URL (overrides series websiteUrl when set) */
 	websiteUrl: text('website_url'),
 	sourceUrl: text('source_url'),
 	rawLlmOutput: jsonb('raw_llm_output'),
+	/** Practical race-day info the enrichment agent extracts (address, start times,
+	 *  bib pickup, facilities, food/expo). Shape: RaceDayInfo. Null fields = not found. */
+	raceDayInfo: jsonb('race_day_info'),
 	/** Deduplication key: slugified eventName+city+year */
 	editionFingerprint: text('edition_fingerprint').notNull().unique(),
 	firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
@@ -75,6 +90,10 @@ export const raceDistances = pgTable('race_distances', {
 	/** Full name including distance suffix, e.g. "Bergen City Marathon – 10K" */
 	name: text('name').notNull(),
 	distanceKm: real('distance_km'),
+	/** Elevation gain in metres (key signal for trail/fjell races) */
+	elevationGainM: real('elevation_gain_m'),
+	/** 'road' | 'trail' | 'mixed' | 'track' */
+	surface: text('surface'),
 	registrationUrl: text('registration_url'),
 	resultsUrl: text('results_url'),
 	/** 'confirmed' | 'likely' | 'unclear' */
@@ -128,6 +147,27 @@ export const raceUserStatus = pgTable(
 	(t) => [unique().on(t.userId, t.editionId)]
 );
 
+// ─── Per-user feature flags ───────────────────────────────────────────────────
+// Developer-defined flags (see src/lib/server/featureFlags.ts) toggled per user
+// by an admin. Absence of a row = flag disabled for that user.
+
+export const userFeatureFlags = pgTable(
+	'user_feature_flags',
+	{
+		id: text('id')
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		/** Flag key, e.g. 'ai_coach' */
+		flag: text('flag').notNull(),
+		enabled: boolean('enabled').notNull().default(false),
+		updatedAt: timestamp('updated_at').notNull().defaultNow()
+	},
+	(t) => [unique().on(t.userId, t.flag)]
+);
+
 // ─── Comments ─────────────────────────────────────────────────────────────────
 
 export const comments = pgTable('comments', {
@@ -145,6 +185,27 @@ export const comments = pgTable('comments', {
 	createdAt: timestamp('created_at').notNull().defaultNow(),
 	deletedAt: timestamp('deleted_at')
 });
+
+// ─── Comment reactions (gamified) ─────────────────────────────────────────────
+
+export const commentReactions = pgTable(
+	'comment_reactions',
+	{
+		id: text('id')
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		commentId: text('comment_id')
+			.notNull()
+			.references(() => comments.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		/** Emoji shortcode, e.g. 'fire' | 'muscle' | 'tada' | 'heart' | 'sweat' */
+		emoji: text('emoji').notNull(),
+		createdAt: timestamp('created_at').notNull().defaultNow()
+	},
+	(t) => [unique().on(t.commentId, t.userId, t.emoji)]
+);
 
 // ─── Agent runs ───────────────────────────────────────────────────────────────
 

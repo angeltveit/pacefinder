@@ -211,6 +211,41 @@
 			scraping = false;
 		}
 	}
+
+	// ── Add race by name (LLM web search + import) ────────────────────────────
+	let importName = $state('');
+	let importing = $state(false);
+	let importLogs = $state<string[]>([]);
+	let importResult = $state('');
+
+	async function importRaceByName() {
+		if (!importName.trim()) return;
+		importing = true;
+		importLogs = [];
+		importResult = '';
+		try {
+			const res = await fetch('/api/admin/import', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ query: importName.trim() })
+			});
+			const data = await res.json().catch(() => ({}));
+			importLogs = data.log ?? [];
+			if (res.ok && data.ok && data.imported) {
+				const verb = data.imported.isNew ? 'Added' : 'Updated';
+				importResult = `✓ ${verb} ${data.imported.name} (${data.imported.city})`;
+				importName = '';
+			} else if (data.notFound) {
+				importResult = `✗ Not found: ${data.notFound}`;
+			} else {
+				importResult = `✗ ${data.message ?? 'Could not import race'}`;
+			}
+		} catch {
+			importResult = '✗ Request failed';
+		} finally {
+			importing = false;
+		}
+	}
 </script>
 
 <svelte:head><title>Admin Dashboard — PaceFinder</title></svelte:head>
@@ -276,6 +311,42 @@
 			{/if}
 		</div>
 	{/if}
+
+	<!-- Add race by name -->
+	<div class="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+		<h2 class="mb-1 font-semibold text-slate-100">Add Race by Name</h2>
+		<p class="mb-3 text-sm text-slate-400">Type a race name — the agent searches the web, finds the official site, gathers the details and imports it.</p>
+		<div class="flex gap-2">
+			<input
+				type="text"
+				bind:value={importName}
+				placeholder="e.g. Sentrumsløpet Oslo, Tromsø Midnight Sun Marathon"
+				class="flex-1 rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-brand focus:outline-none"
+				onkeydown={(e) => e.key === 'Enter' && !importing && importRaceByName()}
+				disabled={importing}
+			/>
+			<button
+				onclick={importRaceByName}
+				disabled={importing || !importName.trim()}
+				class="whitespace-nowrap rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-slate-900 hover:brightness-110 disabled:opacity-60"
+			>
+				{importing ? 'Searching…' : '✨ Find & Add'}
+			</button>
+		</div>
+		{#if importResult}
+			<p class="mt-2 text-sm {importResult.startsWith('✓') ? 'text-green-400' : 'text-red-400'}">{importResult}</p>
+		{/if}
+		{#if importLogs.length > 0 || importing}
+			<div class="mt-3 max-h-48 overflow-y-auto rounded-xl bg-slate-900 p-3 font-mono text-xs text-slate-300">
+				{#each importLogs as line}
+					<div>{line}</div>
+				{/each}
+				{#if importing}
+					<div class="animate-pulse text-slate-500">_</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
 
 	<!-- Add race by URL -->
 	<div class="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">

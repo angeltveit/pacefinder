@@ -50,7 +50,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			}
 		})),
 		userCity: locals.user.city ?? '',
-		userCountry: locals.user.country ?? 'NO'
+		userCountry: locals.user.country ?? 'NO',
+		userGender: (locals.user as { gender?: string | null }).gender ?? ''
 	};
 };
 
@@ -60,8 +61,10 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const city = (form.get('city') as string)?.trim() || null;
 		const country = (form.get('country') as string)?.trim().toUpperCase() || null;
+		const genderRaw = (form.get('gender') as string)?.trim() || '';
+		const gender = ['male', 'female', 'other'].includes(genderRaw) ? genderRaw : null;
 
-		await db.update(user).set({ city, country }).where(eq(user.id, locals.user.id));
+		await db.update(user).set({ city, country, gender }).where(eq(user.id, locals.user.id));
 		return { success: true };
 	}
 };

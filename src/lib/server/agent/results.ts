@@ -356,14 +356,30 @@ async function fetchEqTimingResults(
 	const etapper = eventData.Etapper;
 	if (!etapper || Object.keys(etapper).length === 0) return null;
 
-	// 2. Pick the right Etappe (race) — match by distance or pick first
+	// 2. Pick the right Etappe (race) — match by distance, avoiding relay/kids variants
 	const etappeList = Object.values(etapper);
 	let chosen = etappeList[0];
 	if (distanceKm && etappeList.length > 1) {
-		// Try matching by name (e.g. "10 km Tveitevannet Rundt")
-		const kmStr = Math.round(distanceKm).toString();
-		const byName = etappeList.find(e => e.Navn.includes(`${kmStr} km`) || e.Navn.includes(`${kmStr}km`));
-		if (byName) chosen = byName;
+		const kmRound = Math.round(distanceKm);
+		// Word-boundary distance match so "5 km" doesn't match "15 km"/"25 km"
+		const distRe = new RegExp(`(?<![\\d.,])${kmRound}([.,]\\d+)?\\s?km`, 'i');
+		// Penalize relay / kids / team / fun-run variants
+		const variantRe = /stafett|relay|\blag\b|\bteam\b|barn|kids|mini|pulje/i;
+		const scoreOf = (e: { Navn: string }) => {
+			const name = e.Navn ?? '';
+			let s = 0;
+			if (distRe.test(name)) s += 100;
+			if (variantRe.test(name)) s -= 200;
+			return s;
+		};
+		let bestScore = scoreOf(etappeList[0]);
+		for (const e of etappeList) {
+			const s = scoreOf(e);
+			if (s > bestScore) {
+				bestScore = s;
+				chosen = e;
+			}
+		}
 	}
 	onLog(`    EQ Timing API: fetching results for "${chosen.Navn}" (UID ${chosen.UID})`);
 
@@ -825,6 +841,137 @@ export async function lookupBibResult(
 
 	return [];
 }
+
+/**
+ * Searches a race's timing provider for finishers whose name contains `query`.
+ * Used by the runner search box (covers everyone, not just the stored top-20).
+ */
+export async function lookupNameResult(
+	distanceId: string,
+	query: string
+): Promise<{
+	position: number | null;
+	name: string;
+	bibNumber: string | null;
+	finishTime: string;
+	category: string | null;
+	categoryPosition: number | null;
+	club: string | null;
+	distance: string | null;
+}[]> {
+	const q = query.trim().toLowerCase();
+	if (q.length < 2) return [];
+
+	const dist = await db.query.raceDistances.findFirst({ where: eq(raceDistances.id, distanceId) });
+	if (!dist?.resultsUrl) return [];
+
+	const eqMatch = dist.resultsUrl.match(/live\.eqtiming\.com\/(\d+)/i);
+	if (eqMatch) {
+		return fetchEqTimingNameSearch(eqMatch[1], q);
+	}
+
+	return [];
+}
+
+/**
+ * Name match for the runner search: a single token matches as a word-prefix
+ * (so "ane" finds "Ane"/"Anette" but not "Vanessa"/"Åsane"); a multi-word
+ * query matches as a substring of the full name.
+ */
+function nameMatchesQuery(name: string, queryLower: string): boolean {
+	const n = name.toLowerCase();
+	if (queryLower.includes(' ')) return n.includes(queryLower);
+	return n.split(/[\s\-/]+/).some((tok) => tok.startsWith(queryLower));
+}
+
+/**
+ * Searches all EQ Timing Etapper for finishers whose name contains `queryLower`.
+ */
+async function fetchEqTimingNameSearch(
+	eventId: string,
+	queryLower: string
+): Promise<{
+	position: number | null;
+	name: string;
+	bibNumber: string | null;
+	finishTime: string;
+	category: string | null;
+	categoryPosition: number | null;
+	club: string | null;
+	distance: string | null;
+}[]> {
+	const eventRes = await fetch(`https://live.eqtiming.com/api/event/${eventId}`, {
+		headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)' },
+		signal: AbortSignal.timeout(10_000)
+	}).catch(() => null);
+	if (!eventRes?.ok) return [];
+
+	const eventData = await eventRes.json() as {
+		Etapper?: Record<string, { UID: number; Navn: string }>;
+	};
+	const etapper = eventData.Etapper;
+	if (!etapper || Object.keys(etapper).length === 0) return [];
+
+	const etappeList = Object.values(etapper);
+	const results: {
+		position: number | null;
+		name: string;
+		bibNumber: string | null;
+		finishTime: string;
+		category: string | null;
+		categoryPosition: number | null;
+		club: string | null;
+		distance: string | null;
+	}[] = [];
+
+	for (const etappe of etappeList) {
+		const resultsRes = await fetch(
+			`https://live.eqtiming.com/api/Result/Total/${eventId}/${etappe.UID}?count=1000`,
+			{
+				headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)' },
+				signal: AbortSignal.timeout(15_000)
+			}
+		).catch(() => null);
+		if (!resultsRes?.ok) continue;
+
+		const data = await resultsRes.json() as {
+			Items?: Array<{
+				Plassering?: { Total: number; Klasse: number };
+				Formatert?: string;
+				Deltaker?: {
+					Startnummer?: number;
+					FullStartnummer?: number | string;
+					Klubbnavn?: string;
+					Utover?: { NavnFormatert?: string; Fornavn?: string; Etternavn?: string };
+					Klasse?: { Navn?: string };
+				};
+			}>;
+		};
+		if (!data.Items) continue;
+
+		for (const item of data.Items) {
+			const d = item.Deltaker;
+			if (!d) continue;
+			const name = d.Utover?.NavnFormatert ?? [d.Utover?.Fornavn, d.Utover?.Etternavn].filter(Boolean).join(' ');
+			if (!name || !nameMatchesQuery(name, queryLower)) continue;
+
+			results.push({
+				position: item.Plassering?.Total ?? null,
+				name,
+				bibNumber: String(d.FullStartnummer ?? d.Startnummer ?? ''),
+				finishTime: item.Formatert ?? '',
+				category: d.Klasse?.Navn ?? null,
+				categoryPosition: item.Plassering?.Klasse ?? null,
+				club: d.Klubbnavn ?? null,
+				distance: etappe.Navn
+			});
+			if (results.length >= 25) return results;
+		}
+	}
+
+	return results;
+}
+
 
 /**
  * Searches Ultimate.dk for a specific bib number via the search API.

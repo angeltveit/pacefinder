@@ -18,6 +18,8 @@
 	let researching = $state(false);
 	let fetchingResults = $state(false);
 	let researchLog = $state<string[]>([]);
+	let fixInstruction = $state('');
+	let fixing = $state(false);
 	let bibResults = $state<{ position: number | null; name: string; bibNumber: string | null; finishTime: string; category: string | null; categoryPosition: number | null; club: string | null; distance: string | null }[]>(
 		data.myResult ? [data.myResult] : []
 	);
@@ -45,35 +47,47 @@
 
 	let bibLookupDone = $state(false);
 
-	// ── Color palette (same as RaceCard) ──────────────────────────────────
-	const CARD_COLORS = [
-		{ bg: 'linear-gradient(135deg, #6366f1, #4338ca)', accent: '#a5b4fc' },
-		{ bg: 'linear-gradient(135deg, #f97316, #c2410c)', accent: '#fed7aa' },
-		{ bg: 'linear-gradient(135deg, #06b6d4, #0e7490)', accent: '#a5f3fc' },
-		{ bg: 'linear-gradient(135deg, #ec4899, #be185d)', accent: '#fbcfe8' },
-		{ bg: 'linear-gradient(135deg, #10b981, #047857)', accent: '#a7f3d0' },
-		{ bg: 'linear-gradient(135deg, #8b5cf6, #6d28d9)', accent: '#ddd6fe' },
-		{ bg: 'linear-gradient(135deg, #f59e0b, #b45309)', accent: '#fde68a' },
-		{ bg: 'linear-gradient(135deg, #ef4444, #b91c1c)', accent: '#fecaca' },
-	];
-	function hash(s: string): number {
-		let h = 0;
-		for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-		return h;
-	}
-	function routePath(id: string): string {
-		const h = hash(id);
-		const sy = 55 + (h % 25);
-		const c1x = 55 + ((h >> 3) % 45);
-		const c1y = 20 + ((h >> 6) % 30);
-		const c2x = 170 + ((h >> 9) % 60);
-		const c2y = 65 + ((h >> 12) % 25);
-		const ey = 35 + ((h >> 15) % 30);
-		return `M 10 ${sy} C ${c1x} ${c1y}, ${c2x} ${c2y}, 290 ${ey}`;
+	// ── Search any bib in the race ────────────────────────────────────────
+	let searchBib = $state('');
+	let searchingBib = $state(false);
+	let searchDone = $state(false);
+	let searchResults = $state<typeof bibResults>([]);
+
+	async function searchByBib() {
+		const q = searchBib.trim();
+		if (!q) return;
+		searchingBib = true;
+		searchDone = false;
+		try {
+			const res = await fetch(
+				`/api/races/${data.race.id}/results/lookup?q=${encodeURIComponent(q)}`
+			);
+			if (res.ok) {
+				const json = (await res.json()) as {
+					results: typeof data.results;
+					bibResults: typeof bibResults;
+				};
+				results = json.results;
+				searchResults = json.bibResults;
+			} else {
+				searchResults = [];
+			}
+		} catch {
+			searchResults = [];
+		} finally {
+			searchingBib = false;
+			searchDone = true;
+		}
 	}
 
-	const palette = $derived(CARD_COLORS[hash(data.race.id) % CARD_COLORS.length]);
-	const path = $derived(routePath(data.race.id));
+	// ── Category theming ──────────────────────────────────────────────────
+	import Icon from '$lib/components/Icon.svelte';
+	import TopoArt from '$lib/components/TopoArt.svelte';
+	import { categoryTheme, proxyImage, raceNarrative, raceHighlights, avatar } from '$lib/theme';
+
+	let heroImgOk = $state(true);
+	const theme = $derived(categoryTheme(data.race.category));
+	const heroImg = $derived(proxyImage(data.race.imageUrl));
 
 	function bigDistance(km: number | null): string {
 		if (!km) return '?K';
@@ -85,12 +99,12 @@
 
 	function categoryLabel(cat: string, km: number | null): string {
 		const d = km ?? 0;
-		if (cat === 'local' && d >= 42) return '🏆 Local Legend';
-		if (cat === 'local' && d >= 21) return '💪 Local Flex';
-		if (cat === 'local') return '🏃 Local Hit';
-		if (cat === 'norway' && d >= 42) return '🗻 Epic Norway';
-		if (cat === 'norway') return '🧳 Weekend Trip';
-		return '✈️ Bucket List';
+		if (cat === 'local' && d >= 42) return 'Local marathon';
+		if (cat === 'local' && d >= 21) return 'Local half';
+		if (cat === 'local') return 'Local race';
+		if (cat === 'norway' && d >= 42) return 'Epic Norway';
+		if (cat === 'norway') return 'Weekend trip';
+		return 'Bucket list';
 	}
 
 	function formatDate(d: string | null): string {
@@ -99,8 +113,8 @@
 	}
 
 	function medalText(status: string): string | null {
-		if (status === 'confirmed') return '🏅 Medal confirmed';
-		if (status === 'likely') return '🥈 Medal likely';
+		if (status === 'confirmed') return 'Medal confirmed';
+		if (status === 'likely') return 'Medal likely';
 		return null;
 	}
 
@@ -108,9 +122,9 @@
 
 	function regText(status: string): { text: string; cls: string } | null {
 		if (isPast) return null;
-		if (status === 'open') return { text: '🟢 Registration open', cls: 'chip-green' };
-		if (status === 'opening_soon') return { text: '⏰ Opens soon', cls: 'chip-yellow' };
-		if (status === 'closed') return { text: '🔒 Closed', cls: 'chip-muted' };
+		if (status === 'open') return { text: 'Registration open', cls: 'chip-green' };
+		if (status === 'opening_soon') return { text: 'Opens soon', cls: 'chip-yellow' };
+		if (status === 'closed') return { text: 'Closed', cls: 'chip-muted' };
 		return null;
 	}
 
@@ -188,7 +202,7 @@
 			});
 			if (res.ok) {
 				const { comment } = await res.json();
-				comments = [...comments, { ...comment, authorName: data.user?.name ?? 'You', authorId: data.user?.id, createdAt: new Date().toISOString() }];
+				comments = [...comments, { ...comment, authorName: data.user?.name ?? 'You', authorId: data.user?.id, createdAt: new Date().toISOString(), reactions: {}, myReactions: [] }];
 				commentBody = '';
 			}
 		} finally {
@@ -201,6 +215,55 @@
 		const res = await fetch(`/api/comments/${id}`, { method: 'DELETE' });
 		if (res.ok) comments = comments.filter((c) => c.id !== id);
 	}
+
+	// ── Gamified reactions ────────────────────────────────────────────────
+	const REACTIONS: { key: string; char: string; label: string }[] = [
+		{ key: 'fire', char: '🔥', label: 'Fire' },
+		{ key: 'muscle', char: '💪', label: 'Beast' },
+		{ key: 'tada', char: '🎉', label: 'Hype' },
+		{ key: 'heart', char: '❤️', label: 'Love' },
+		{ key: 'sweat', char: '😅', label: 'Relatable' },
+		{ key: 'goat', char: '🐐', label: 'GOAT' }
+	];
+	let reactionPickerFor = $state<string | null>(null);
+
+	async function toggleReaction(commentId: string, emoji: string) {
+		if (!data.user) {
+			window.location.href = '/login';
+			return;
+		}
+		reactionPickerFor = null;
+		// Optimistic update
+		const idx = comments.findIndex((c) => c.id === commentId);
+		if (idx === -1) return;
+		const c = comments[idx];
+		const mine = c.myReactions ?? [];
+		const has = mine.includes(emoji);
+		const nextCounts = { ...(c.reactions ?? {}) };
+		nextCounts[emoji] = Math.max(0, (nextCounts[emoji] ?? 0) + (has ? -1 : 1));
+		if (nextCounts[emoji] === 0) delete nextCounts[emoji];
+		const nextMine = has ? mine.filter((e) => e !== emoji) : [...mine, emoji];
+		comments[idx] = { ...c, reactions: nextCounts, myReactions: nextMine };
+		comments = [...comments];
+		try {
+			const res = await fetch(`/api/comments/${commentId}/react`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ emoji })
+			});
+			if (res.ok) {
+				const { counts } = await res.json();
+				const j = comments.findIndex((cc) => cc.id === commentId);
+				if (j !== -1) {
+					comments[j] = { ...comments[j], reactions: counts };
+					comments = [...comments];
+				}
+			}
+		} catch {
+			// keep optimistic state on network hiccup
+		}
+	}
+
 
 	async function deleteRace() {
 		if (!confirm(`Delete "${data.race.name}" permanently?`)) return;
@@ -249,7 +312,33 @@
 		}
 	}
 
-	// ── Admin inline editor ───────────────────────────────────────────────────
+	async function fixWithAi() {
+		const instruction = fixInstruction.trim();
+		if (!instruction) return;
+		fixing = true;
+		researchLog = [`🤖 Applying: "${instruction}"`];
+		try {
+			const res = await fetch(`/api/races/${data.race.id}/fix`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ instruction })
+			});
+			const result = await res.json().catch(() => ({}));
+			if (res.ok) {
+				researchLog = result.log ?? ['Done!'];
+				if ((result.changed ?? []).length > 0) {
+					fixInstruction = '';
+					setTimeout(() => window.location.reload(), 1500);
+				}
+			} else {
+				researchLog = [...researchLog, `Error: ${result.message ?? res.statusText}`];
+			}
+		} catch (err) {
+			researchLog = [...researchLog, `Error: ${err}`];
+		} finally {
+			fixing = false;
+		}
+	}
 	let showAdminEdit = $state(false);
 	let adminSaving = $state(false);
 	let adminSaveResult = $state('');
@@ -298,31 +387,119 @@
 	const medal = $derived(medalText(data.race.medalStatus));
 	const reg = $derived(regText(data.race.registrationStatus));
 	const catLabel = $derived(categoryLabel(data.race.category, data.race.distanceKm));
+
+	// ── Key facts ─────────────────────────────────────────────────────────
+	function fmtPrice(min: number | null, max: number | null, cur: string | null): string | null {
+		if (min == null && max == null) return null;
+		const c = cur ?? 'NOK';
+		if (min != null && max != null && min !== max) return `${min}–${max} ${c}`;
+		return `${min ?? max} ${c}`;
+	}
+	const deadlineDays = $derived.by(() => {
+		if (!data.race.registrationDeadline) return null;
+		const ms = new Date(data.race.registrationDeadline).getTime() - Date.now();
+		return Math.ceil(ms / 86_400_000);
+	});
+	const facts = $derived.by(() => {
+		const r = data.race;
+		const list: { icon: string; label: string; value: string; urgent?: boolean }[] = [];
+		const price = fmtPrice(r.priceMin, r.priceMax, r.priceCurrency);
+		if (price) list.push({ icon: 'zap', label: 'Entry', value: price });
+		if (deadlineDays != null && deadlineDays >= 0 && !isPast) {
+			list.push({
+				icon: 'clock',
+				label: 'Closes',
+				value: deadlineDays === 0 ? 'Today' : `in ${deadlineDays} day${deadlineDays === 1 ? '' : 's'}`,
+				urgent: deadlineDays <= 14
+			});
+		}
+		if (r.elevationGainM) list.push({ icon: 'mountain', label: 'Climb', value: `${Math.round(r.elevationGainM)} m` });
+		if (r.surface) list.push({ icon: 'route', label: 'Surface', value: r.surface });
+		if (r.fieldSize) list.push({ icon: 'users', label: 'Field', value: `${r.fieldSize.toLocaleString('en')} runners` });
+		return list;
+	});
+
+	// ── Rich narrative ────────────────────────────────────────────────────
+	const narrative = $derived(
+		raceNarrative({
+			eventName: data.race.eventName,
+			city: data.race.city,
+			country: data.race.country,
+			category: data.race.category,
+			distanceKm: data.race.distanceKm,
+			medalStatus: data.race.medalStatus,
+			surface: data.race.surface,
+			elevationGainM: data.race.elevationGainM,
+			fieldSize: data.race.fieldSize,
+			raceDate: data.race.raceDate,
+			priceMin: data.race.priceMin,
+			priceMax: data.race.priceMax,
+			priceCurrency: data.race.priceCurrency,
+			whyItFits: data.race.whyItFits
+		})
+	);
+	const highlights = $derived(
+		raceHighlights({
+			eventName: data.race.eventName,
+			city: data.race.city,
+			country: data.race.country,
+			category: data.race.category,
+			distanceKm: data.race.distanceKm,
+			medalStatus: data.race.medalStatus,
+			surface: data.race.surface,
+			elevationGainM: data.race.elevationGainM,
+			fieldSize: data.race.fieldSize,
+			raceDate: data.race.raceDate
+		})
+	);
+
+	// ── Race-day essentials: the things runners always wonder about ────────
+	type Essential = { icon: string; label: string; value: string | null };
+	const essentials = $derived.by<Essential[]>(() => {
+		const r = data.race;
+		const rdi = r.raceDayInfo;
+		const medalValue =
+			r.medalStatus === 'confirmed'
+				? 'Yes — finisher medal'
+				: r.medalStatus === 'likely'
+					? 'Most likely'
+					: null;
+		const medalDisplay = rdi?.medalNote ?? medalValue;
+		return [
+			{ icon: 'map-pin', label: 'Where', value: rdi?.address ?? r.location ?? null },
+			{ icon: 'medal', label: 'Medal', value: medalDisplay },
+			{ icon: 'clock', label: 'Start time', value: rdi?.startTimes ?? null },
+			{ icon: 'ticket', label: 'Bib pickup', value: rdi?.bibPickup ?? null },
+			{ icon: 'package', label: 'Toilets & bag drop', value: rdi?.facilities ?? null },
+			{ icon: 'utensils', label: 'Food & extras', value: rdi?.extras ?? null }
+		];
+	});
+	const knownEssentials = $derived(essentials.filter((e) => e.value));
+	const missingEssentials = $derived(essentials.filter((e) => !e.value));
 </script>
 
 <svelte:head><title>{data.race.eventName} — PaceFinder</title></svelte:head>
 
 <div class="detail-page">
 	<!-- Back link -->
-	<a href="/races" class="back-link">← Back to races</a>
+	<a href="/races" class="back-link"><Icon name="chevron-right" size={15} class="back-ic" /> Back to races</a>
 
 	<!-- ═══ Hero header ═══ -->
-	<div class="hero" style="background:{data.race.imageUrl ? `url(${data.race.imageUrl}) center/cover` : palette.bg};">
-		{#if data.race.imageUrl}
+	<div class="hero pf-rise" style="--accent:{theme.color}; --soft:{theme.soft};">
+		{#if data.race.imageUrl && heroImgOk}
+			<img class="hero-img" src={heroImg} alt={data.race.eventName} onerror={() => heroImgOk = false} />
 			<div class="hero-overlay"></div>
+		{:else}
+			<TopoArt seed={data.race.id} color={theme.color} class="hero-topo" />
+			<div class="hero-overlay hero-overlay-soft"></div>
 		{/if}
-		<svg class="hero-route" viewBox="0 0 300 100" preserveAspectRatio="none" aria-hidden="true">
-			<path d={path} fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="3" stroke-linecap="round" stroke-dasharray="6 8" />
-			<circle cx="10" cy="55" r="5" fill="rgba(255,255,255,0.8)" />
-			<circle cx="290" cy="45" r="6" fill={palette.accent} />
-		</svg>
 
 		<div class="hero-content">
-			<div class="hero-cat">{catLabel}</div>
+			<div class="hero-cat"><Icon name={theme.icon as never} size={14} /> {catLabel}</div>
 		</div>
 
 		{#if data.race.medalStatus === 'confirmed' || data.race.medalStatus === 'likely'}
-			<div class="hero-medal">{data.race.medalStatus === 'confirmed' ? '🏅' : '🥈'}</div>
+			<div class="hero-medal"><Icon name="medal" size={20} /></div>
 		{/if}
 	</div>
 
@@ -330,23 +507,38 @@
 	<div class="content-card">
 		<h1 class="title">{data.race.eventName}</h1>
 		<p class="meta">
-			📍 {data.race.city}{data.race.country !== 'NO' ? `, ${data.race.country}` : ''}
+			<Icon name="map-pin" size={15} /> {data.race.city}{data.race.country !== 'NO' ? `, ${data.race.country}` : ''}
 			{#if data.race.location && data.race.location !== data.race.city}
 				· {data.race.location}
 			{/if}
 		</p>
-		<p class="meta">📅 {formatDate(data.race.raceDate)}</p>
+		<p class="meta"><Icon name="calendar" size={15} /> {formatDate(data.race.raceDate)}</p>
 
 		<!-- Status chips -->
 		<div class="chips">
 			{#if medal}
-				<span class="chip chip-gold">{medal}</span>
+				<span class="chip chip-gold"><Icon name="medal" size={13} /> {medal}</span>
 			{/if}
 			{#if reg}
 				<span class="chip {reg.cls}">{reg.text}</span>
 			{/if}
-			<span class="chip chip-muted">❤️ {data.interestedCount} interested</span>
+			<span class="chip chip-muted"><Icon name="heart" size={13} /> {data.interestedCount} interested</span>
 		</div>
+
+		<!-- Key facts -->
+		{#if facts.length > 0}
+			<div class="facts">
+				{#each facts as f}
+					<div class="fact {f.urgent ? 'fact-urgent' : ''}">
+						<span class="fact-ic"><Icon name={f.icon as never} size={16} /></span>
+						<div class="fact-text">
+							<span class="fact-label">{f.label}</span>
+							<span class="fact-value">{f.value}</span>
+						</div>
+					</div>
+				{/each}
+			</div>
+		{/if}
 
 		<!-- Verdict -->
 		{#if data.race.whyItFits}
@@ -462,6 +654,62 @@
 		{/if}
 	</div>
 
+	<!-- ═══ About this race ═══ -->
+	{#if narrative.length > 0}
+		<div class="about-card">
+			<h2 class="section-title">
+				<Icon name="sparkles" size={18} /> About this race
+			</h2>
+			{#if highlights.length > 0}
+				<div class="highlight-strip">
+					{#each highlights as h}
+						<span class="highlight-chip"><Icon name={h.icon as never} size={14} /> {h.text}</span>
+					{/each}
+				</div>
+			{/if}
+			<div class="about-body">
+				{#each narrative as para}
+					<p class="about-para">{para}</p>
+				{/each}
+			</div>
+		</div>
+	{/if}
+
+	<!-- ═══ Race-day essentials ═══ -->
+	<div class="essentials-card">
+		<h2 class="section-title">
+			<Icon name="info" size={18} /> Race-day essentials
+		</h2>
+		{#if knownEssentials.length > 0}
+			<ul class="essentials-list">
+				{#each knownEssentials as e}
+					<li class="essential-row">
+						<span class="essential-ic"><Icon name={e.icon as never} size={16} /></span>
+						<span class="essential-text">
+							<span class="essential-label">{e.label}</span>
+							<span class="essential-value">{e.value}</span>
+						</span>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+
+		{#if missingEssentials.length > 0}
+			<div class="essentials-missing">
+				<p class="missing-lead">
+					We haven't confirmed {missingEssentials.map((e) => e.label.toLowerCase()).join(', ')} yet.
+				</p>
+				<p class="missing-hint">
+					{#if data.race.websiteUrl}
+						Check the <a href={data.race.websiteUrl} target="_blank" rel="noopener noreferrer">official website</a> or the organiser's social media for the latest.
+					{:else}
+						Check the organiser's website or social media for the latest.
+					{/if}
+				</p>
+			</div>
+		{/if}
+	</div>
+
 	<!-- ═══ Other distances ═══ -->
 	{#if data.siblings.length > 0}
 		{@const allDistances = [
@@ -477,6 +725,60 @@
 					</a>
 				{/each}
 			</div>
+		</div>
+	{/if}
+
+	<!-- ═══ Find a runner by BIB ═══ -->
+	{#if data.user && (results.length > 0 || data.race.resultsUrl)}
+		<div class="bib-search-card">
+			<h3 class="bib-search-title">🔍 Find a runner</h3>
+			<p class="bib-search-sub">Search by BIB number or runner name to see their result.</p>
+			<div class="bib-search-row">
+				<input
+					type="text"
+					class="bib-search-input"
+					placeholder="BIB number or name"
+					bind:value={searchBib}
+					onkeydown={(e) => e.key === 'Enter' && !searchingBib && searchByBib()}
+					disabled={searchingBib}
+				/>
+				<button
+					class="btn-bib-search"
+					onclick={searchByBib}
+					disabled={searchingBib || !searchBib.trim()}
+				>
+					{searchingBib ? 'Searching…' : 'Search'}
+				</button>
+			</div>
+
+			{#if searchResults.length > 0}
+				{#each searchResults as result}
+					<div class="bib-search-result">
+						<span class="bib-result-pos">
+							{#if result.position === 1}🥇
+							{:else if result.position === 2}🥈
+							{:else if result.position === 3}🥉
+							{:else if result.position}#{result.position}
+							{:else}—
+							{/if}
+						</span>
+						<span class="bib-result-info">
+							<span class="bib-result-name">
+								{result.name}
+								{#if result.bibNumber}<span class="bib-result-num">BIB #{result.bibNumber}</span>{/if}
+							</span>
+							{#if result.club}<span class="bib-result-club">{result.club}</span>{/if}
+							<span class="bib-result-meta">
+								{#if result.category}{result.category}{/if}
+								{#if result.distance}· {result.distance}{:else if data.race.distanceKm}· {data.race.distanceKm} km{/if}
+							</span>
+						</span>
+						<span class="bib-result-time">{result.finishTime}</span>
+					</div>
+				{/each}
+			{:else if searchDone}
+				<p class="bib-search-empty">No runner found matching "{searchBib.trim()}".</p>
+			{/if}
 		</div>
 	{/if}
 
@@ -533,6 +835,27 @@
 				</button>
 				<button class="btn-delete" onclick={deleteRace} disabled={deleting}>
 					{deleting ? 'Deleting…' : '🗑 Delete race'}
+				</button>
+			</div>
+
+			<!-- Fix with AI: plain-language correction -->
+			<div class="ai-fix">
+				<label class="ai-fix-label" for="ai-fix-input">🤖 Fix with AI</label>
+				<p class="ai-fix-hint">Describe what's wrong and the agent will correct the data — e.g. "this event only has medals for children", "the date is actually 5 May 2026", or "registration is closed now".</p>
+				<textarea
+					id="ai-fix-input"
+					class="ai-fix-input"
+					rows="2"
+					placeholder="Tell the agent what needs to change…"
+					bind:value={fixInstruction}
+					disabled={fixing}
+				></textarea>
+				<button
+					class="btn-ai-fix"
+					onclick={fixWithAi}
+					disabled={fixing || !fixInstruction.trim()}
+				>
+					{fixing ? '🤖 Applying…' : '✨ Apply fix'}
 				</button>
 			</div>
 
@@ -647,16 +970,27 @@
 	<!-- ═══ Comments ═══ -->
 	<div class="comments-section">
 		<h2 class="section-title">
-			💬 Comments
+			<Icon name="message" size={18} /> The chatter
 			{#if comments.length > 0}
-				<span class="comment-count">({comments.length})</span>
+				<span class="comment-count">{comments.length} {comments.length === 1 ? 'runner' : 'runners'} in the chat</span>
 			{/if}
 		</h2>
 
+		{#if comments.length === 0}
+			<div class="comments-empty">
+				<span class="comments-empty-emoji">💬</span>
+				<p class="comments-empty-title">No chatter yet</p>
+				<p class="comments-empty-sub">
+					{data.user ? 'Be the first to break the ice — drop a tip, a goal, or some hype.' : 'Log in and be the first to break the ice.'}
+				</p>
+			</div>
+		{/if}
+
 		{#each comments as comment (comment.id)}
+			{@const av = avatar(comment.authorName)}
 			<div class="comment-card">
 				<div class="comment-header">
-					<div class="comment-avatar">{comment.authorName.charAt(0).toUpperCase()}</div>
+					<div class="comment-avatar" style="background:linear-gradient(135deg, {av.from}, {av.to});">{av.initials}</div>
 					<span class="comment-author">{comment.authorName}</span>
 					<span class="comment-date">
 						{new Date(comment.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
@@ -666,28 +1000,80 @@
 					{/if}
 				</div>
 				<p class="comment-body">{comment.body}</p>
+
+				<!-- Reactions -->
+				<div class="reaction-row">
+					{#each REACTIONS as r}
+						{@const count = comment.reactions?.[r.key] ?? 0}
+						{#if count > 0}
+							<button
+								class="reaction-chip {comment.myReactions?.includes(r.key) ? 'mine' : ''}"
+								onclick={() => toggleReaction(comment.id, r.key)}
+								title={r.label}
+							>
+								<span class="reaction-emoji">{r.char}</span>
+								<span class="reaction-count">{count}</span>
+							</button>
+						{/if}
+					{/each}
+
+					<div class="reaction-add-wrap">
+						<button
+							class="reaction-add"
+							onclick={() => (reactionPickerFor = reactionPickerFor === comment.id ? null : comment.id)}
+							title="Add reaction"
+							aria-label="Add reaction"
+						>
+							<Icon name="sparkles" size={14} />
+						</button>
+						{#if reactionPickerFor === comment.id}
+							<div class="reaction-picker">
+								{#each REACTIONS as r}
+									<button
+										class="reaction-picker-btn {comment.myReactions?.includes(r.key) ? 'mine' : ''}"
+										onclick={() => toggleReaction(comment.id, r.key)}
+										title={r.label}
+									>
+										{r.char}
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				</div>
 			</div>
 		{/each}
 
 		{#if data.user}
+			{@const me = avatar(data.user.name ?? 'You')}
 			<div class="comment-form">
-				<textarea
-					bind:value={commentBody}
-					placeholder="Add a comment…"
-					rows="3"
-					class="comment-input"
-				></textarea>
-				<button
-					onclick={submitComment}
-					disabled={submitting || !commentBody.trim()}
-					class="btn-post"
-				>
-					{submitting ? 'Posting…' : 'Post comment'}
-				</button>
+				<div class="comment-form-avatar" style="background:linear-gradient(135deg, {me.from}, {me.to});">{me.initials}</div>
+				<div class="comment-form-main">
+					<textarea
+						bind:value={commentBody}
+						placeholder="Share a tip, a goal, or some hype…"
+						rows="3"
+						class="comment-input"
+					></textarea>
+					<div class="comment-form-footer">
+						<div class="quick-prompts">
+							{#each ['Just signed up! 🎉', 'Anyone else nervous? 😅', 'Going for a PB 💪'] as q}
+								<button type="button" class="quick-prompt" onclick={() => (commentBody = commentBody ? commentBody : q)}>{q}</button>
+							{/each}
+						</div>
+						<button
+							onclick={submitComment}
+							disabled={submitting || !commentBody.trim()}
+							class="btn-post"
+						>
+							{submitting ? 'Posting…' : 'Post'}
+						</button>
+					</div>
+				</div>
 			</div>
 		{:else}
 			<p class="login-prompt">
-				<a href="/login">Log in</a> to leave a comment.
+				<a href="/login">Log in</a> to join the chat.
 			</p>
 		{/if}
 	</div>
@@ -723,26 +1109,35 @@
 	/* ── Hero ── */
 	.hero {
 		position: relative;
-		height: 180px;
-		border-radius: 1.25rem;
+		height: 200px;
+		border-radius: var(--r-lg);
 		overflow: hidden;
 		display: flex;
 		align-items: flex-end;
 		padding: 20px;
+		border: 1px solid var(--line);
 	}
-	.hero-overlay {
-		position: absolute;
-		inset: 0;
-		background: linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.65) 100%);
-		z-index: 1;
-	}
-	.hero-route {
+	.hero-img {
 		position: absolute;
 		inset: 0;
 		width: 100%;
 		height: 100%;
-		opacity: 0.8;
-		z-index: 2;
+		object-fit: cover;
+		z-index: 0;
+	}
+	:global(.hero-topo) {
+		position: absolute;
+		inset: 0;
+		z-index: 0;
+	}
+	.hero-overlay {
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(to bottom, rgba(0,0,0,0.05) 0%, rgba(7,10,18,0.78) 100%);
+		z-index: 1;
+	}
+	.hero-overlay-soft {
+		background: linear-gradient(to bottom, rgba(7,10,18,0.05) 0%, rgba(7,10,18,0.55) 100%);
 	}
 	.hero-content {
 		position: relative;
@@ -751,56 +1146,70 @@
 		flex-direction: column;
 		gap: 6px;
 	}
-	.hero-distance {
-		font-size: 3rem;
-		font-weight: 900;
-		color: white;
-		letter-spacing: -0.03em;
-		line-height: 1;
-		text-shadow: 0 4px 12px rgba(0,0,0,0.3);
-	}
 	.hero-cat {
-		background: rgba(0,0,0,0.45);
-		backdrop-filter: blur(8px);
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		background: rgba(10,14,23,0.55);
+		backdrop-filter: blur(10px);
+		border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 		border-radius: 999px;
-		padding: 5px 14px;
+		padding: 6px 14px;
 		font-size: 0.8rem;
 		font-weight: 700;
-		color: rgba(255,255,255,0.9);
+		color: var(--accent);
 		width: fit-content;
 	}
 	.hero-medal {
 		position: absolute;
 		top: 16px;
-		right: 20px;
+		right: 18px;
 		z-index: 3;
-		font-size: 2.5rem;
-		filter: drop-shadow(0 3px 6px rgba(0,0,0,0.5));
-		animation: bounce-soft 2s ease-in-out infinite;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 40px;
+		height: 40px;
+		border-radius: 50%;
+		background: rgba(10,14,23,0.6);
+		backdrop-filter: blur(8px);
+		border: 1px solid rgba(251,191,36,0.45);
+		color: #fbbf24;
+		animation: bounce-soft 2.4s ease-in-out infinite;
 	}
 	@keyframes bounce-soft {
 		0%, 100% { transform: translateY(0); }
 		50% { transform: translateY(-4px); }
 	}
 
+	.back-link :global(.back-ic) {
+		transform: rotate(180deg);
+		vertical-align: -2px;
+	}
+
 	/* ── Content card ── */
 	.content-card {
-		background: #151a2e;
-		border-radius: 1.25rem;
-		padding: 20px;
-		border: 1px solid rgba(255,255,255,0.06);
+		background: var(--color-surface);
+		border-radius: var(--r-lg);
+		padding: 22px;
+		border: 1px solid var(--line);
 	}
 	.title {
-		font-size: 1.5rem;
-		font-weight: 900;
-		color: white;
-		line-height: 1.2;
-		margin-bottom: 8px;
+		font-family: var(--font-display);
+		font-size: clamp(1.4rem, 4.5vw, 1.9rem);
+		font-weight: 700;
+		letter-spacing: -0.02em;
+		color: var(--text-strong);
+		line-height: 1.15;
+		margin-bottom: 10px;
 	}
 	.meta {
-		font-size: 0.85rem;
-		color: #64748b;
-		margin-bottom: 4px;
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		font-size: 0.88rem;
+		color: var(--text-muted);
+		margin-bottom: 5px;
 	}
 
 	.chips {
@@ -810,6 +1219,9 @@
 		margin: 14px 0;
 	}
 	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
 		font-size: 0.75rem;
 		font-weight: 700;
 		padding: 5px 12px;
@@ -836,6 +1248,48 @@
 		background: rgba(100,116,139,0.1);
 		border-color: rgba(100,116,139,0.2);
 	}
+
+	/* ── Key facts ── */
+	.facts {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+		gap: 10px;
+		margin: 16px 0 18px;
+	}
+	.fact {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 12px 14px;
+		border-radius: var(--r-md);
+		background: var(--color-surface-2);
+		border: 1px solid var(--line);
+	}
+	.fact-urgent {
+		background: rgba(255,122,69,0.1);
+		border-color: rgba(255,122,69,0.35);
+	}
+	.fact-ic {
+		display: flex;
+		color: var(--color-brand-dim);
+		flex-shrink: 0;
+	}
+	.fact-urgent .fact-ic { color: var(--color-urgent); }
+	.fact-text { display: flex; flex-direction: column; min-width: 0; }
+	.fact-label {
+		font-size: 0.68rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--text-faint);
+	}
+	.fact-value {
+		font-size: 0.92rem;
+		font-weight: 700;
+		color: var(--text-strong);
+		text-transform: capitalize;
+	}
+	.fact-urgent .fact-value { color: var(--color-urgent); }
 
 	.verdict {
 		padding: 14px 16px;
@@ -1237,6 +1691,115 @@
 		text-decoration: underline;
 	}
 
+	/* ── Find a runner by BIB ── */
+	.bib-search-card {
+		background: #151a2e;
+		border-radius: 1rem;
+		padding: 16px;
+		border: 1px solid rgba(255,255,255,0.06);
+	}
+	.bib-search-title {
+		font-size: 1rem;
+		font-weight: 800;
+		color: white;
+	}
+	.bib-search-sub {
+		font-size: 0.8rem;
+		color: #94a3b8;
+		margin: 4px 0 12px;
+	}
+	.bib-search-row {
+		display: flex;
+		gap: 8px;
+	}
+	.bib-search-input {
+		flex: 1;
+		min-width: 0;
+		padding: 10px 12px;
+		border-radius: 10px;
+		background: rgba(0,0,0,0.25);
+		border: 1px solid rgba(255,255,255,0.1);
+		color: #e6ecf4;
+		font-size: 0.9rem;
+	}
+	.bib-search-input:focus {
+		outline: none;
+		border-color: rgba(163,230,53,0.5);
+	}
+	.bib-search-input:disabled { opacity: 0.6; }
+	.btn-bib-search {
+		padding: 10px 18px;
+		border-radius: 10px;
+		font-size: 0.85rem;
+		font-weight: 700;
+		border: none;
+		cursor: pointer;
+		background: #a3e635;
+		color: #0f1320;
+		white-space: nowrap;
+		transition: filter 0.15s;
+	}
+	.btn-bib-search:hover:not(:disabled) { filter: brightness(1.08); }
+	.btn-bib-search:disabled { opacity: 0.5; cursor: not-allowed; }
+	.bib-search-result {
+		display: grid;
+		grid-template-columns: 40px 1fr auto;
+		align-items: center;
+		gap: 10px;
+		margin-top: 12px;
+		padding: 12px;
+		border-radius: 12px;
+		background: rgba(163,230,53,0.08);
+		border: 1px solid rgba(163,230,53,0.2);
+	}
+	.bib-result-pos {
+		font-weight: 800;
+		color: #94a3b8;
+		font-size: 0.95rem;
+	}
+	.bib-result-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.bib-result-name {
+		color: white;
+		font-weight: 700;
+		font-size: 0.9rem;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.bib-result-num {
+		font-size: 0.7rem;
+		font-weight: 600;
+		color: #a3e635;
+		background: rgba(163,230,53,0.12);
+		padding: 1px 7px;
+		border-radius: 999px;
+	}
+	.bib-result-club {
+		font-size: 0.74rem;
+		color: #64748b;
+	}
+	.bib-result-meta {
+		font-size: 0.74rem;
+		color: #94a3b8;
+	}
+	.bib-result-time {
+		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-size: 0.9rem;
+		font-weight: 700;
+		color: #a3e635;
+	}
+	.bib-search-empty {
+		margin-top: 12px;
+		font-size: 0.82rem;
+		color: #94a3b8;
+	}
+
 	/* ── Admin tools ── */
 	.admin-tools {
 		background: #1a1225;
@@ -1279,6 +1842,57 @@
 		color: #fca5a5;
 		transition: background 0.15s;
 	}
+	/* Fix with AI */
+	.ai-fix {
+		margin-top: 14px;
+		padding: 14px;
+		border-radius: 14px;
+		background: rgba(139, 92, 246, 0.08);
+		border: 1px solid rgba(139, 92, 246, 0.22);
+	}
+	.ai-fix-label {
+		display: block;
+		font-size: 0.85rem;
+		font-weight: 800;
+		color: #c4b5fd;
+	}
+	.ai-fix-hint {
+		font-size: 0.78rem;
+		line-height: 1.5;
+		color: #9aa4b6;
+		margin: 4px 0 10px;
+	}
+	.ai-fix-input {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 10px 12px;
+		border-radius: 10px;
+		background: rgba(0, 0, 0, 0.25);
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		color: #e6ecf4;
+		font-size: 0.88rem;
+		font-family: inherit;
+		resize: vertical;
+	}
+	.ai-fix-input:focus {
+		outline: none;
+		border-color: rgba(139, 92, 246, 0.55);
+	}
+	.ai-fix-input:disabled { opacity: 0.6; }
+	.btn-ai-fix {
+		margin-top: 10px;
+		padding: 9px 18px;
+		border-radius: 10px;
+		font-size: 0.85rem;
+		font-weight: 700;
+		border: none;
+		cursor: pointer;
+		background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+		color: white;
+		transition: filter 0.15s;
+	}
+	.btn-ai-fix:hover:not(:disabled) { filter: brightness(1.12); }
+	.btn-ai-fix:disabled { opacity: 0.5; cursor: not-allowed; }
 	.btn-delete:hover:not(:disabled) { background: rgba(239, 68, 68, 0.3); }
 	.btn-delete:disabled { opacity: 0.5; }
 	.btn-admin-edit {
@@ -1425,14 +2039,138 @@
 		color: white;
 	}
 	.comment-count {
-		font-weight: 400;
-		color: #64748b;
-		font-size: 0.9rem;
+		font-weight: 600;
+		color: var(--color-brand, #c4f042);
+		font-size: 0.78rem;
+		background: rgba(196,240,66,0.1);
+		padding: 2px 10px;
+		border-radius: 999px;
 	}
 
+	/* ── About this race ── */
+	.about-card {
+		background: var(--color-surface, #151a2e);
+		border-radius: var(--r-lg, 20px);
+		padding: 20px 22px;
+		border: 1px solid rgba(255,255,255,0.06);
+	}
+	.highlight-strip {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin: 14px 0 4px;
+	}
+	.highlight-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 11px;
+		border-radius: 999px;
+		font-size: 0.76rem;
+		font-weight: 600;
+		color: #d7e0ee;
+		background: rgba(255,255,255,0.04);
+		border: 1px solid rgba(255,255,255,0.07);
+		text-transform: capitalize;
+	}
+	.highlight-chip :global(svg) { color: var(--color-brand, #c4f042); }
+	.about-body {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		margin-top: 16px;
+	}
+	.about-para {
+		font-size: 0.92rem;
+		line-height: 1.65;
+		color: #c3cdda;
+	}
+	.about-para:first-child {
+		font-size: 1rem;
+		color: #e6ecf4;
+	}
+
+	/* ── Race-day essentials ── */
+	.essentials-card {
+		background: var(--color-surface, #151a2e);
+		border-radius: var(--r-lg, 20px);
+		padding: 20px 22px;
+		border: 1px solid rgba(255,255,255,0.06);
+	}
+	.essentials-list {
+		list-style: none;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin: 14px 0 0;
+		padding: 0;
+	}
+	.essential-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 12px;
+		padding: 12px 0;
+		border-bottom: 1px solid rgba(255,255,255,0.05);
+	}
+	.essential-row:last-child { border-bottom: none; }
+	.essential-ic {
+		flex: 0 0 34px;
+		width: 34px;
+		height: 34px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 10px;
+		background: rgba(196,240,66,0.1);
+		color: var(--color-brand, #c4f042);
+		margin-top: 1px;
+	}
+	.essential-text {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.essential-label {
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		color: #8b97a8;
+	}
+	.essential-value {
+		font-size: 0.92rem;
+		line-height: 1.5;
+		color: #e6ecf4;
+	}
+	.essentials-missing {
+		margin-top: 16px;
+		padding: 13px 15px;
+		border-radius: var(--r-md, 14px);
+		background: rgba(255,255,255,0.03);
+		border: 1px dashed rgba(255,255,255,0.12);
+	}
+	.missing-lead {
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: #c3cdda;
+	}
+	.missing-hint {
+		font-size: 0.83rem;
+		line-height: 1.55;
+		color: #97a2b3;
+		margin-top: 4px;
+	}
+	.missing-hint a {
+		color: var(--color-brand, #c4f042);
+		font-weight: 600;
+		text-decoration: none;
+	}
+	.missing-hint a:hover { text-decoration: underline; }
+
 	.comment-card {
-		background: #151a2e;
-		border-radius: 14px;
+		background: var(--color-surface, #151a2e);
+		border-radius: var(--r-md, 14px);
 		padding: 14px 16px;
 		border: 1px solid rgba(255,255,255,0.06);
 	}
@@ -1443,17 +2181,17 @@
 		margin-bottom: 8px;
 	}
 	.comment-avatar {
-		width: 28px;
-		height: 28px;
+		width: 30px;
+		height: 30px;
 		border-radius: 50%;
-		background: rgba(163,230,53,0.15);
-		border: 1px solid rgba(163,230,53,0.3);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		font-size: 0.72rem;
-		font-weight: 700;
-		color: #a3e635;
+		font-size: 0.7rem;
+		font-weight: 800;
+		color: #0c0f1a;
+		flex-shrink: 0;
+		box-shadow: 0 2px 8px rgba(0,0,0,0.25);
 	}
 	.comment-author {
 		font-size: 0.82rem;
@@ -1480,11 +2218,149 @@
 		line-height: 1.5;
 	}
 
+	/* ── Reactions ── */
+	.reaction-row {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-top: 10px;
+	}
+	.reaction-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 3px 9px 3px 7px;
+		border-radius: 999px;
+		font-size: 0.78rem;
+		font-weight: 700;
+		color: #c3cdda;
+		background: rgba(255,255,255,0.05);
+		border: 1px solid rgba(255,255,255,0.08);
+		cursor: pointer;
+		transition: transform 0.12s var(--ease-spring, ease), background 0.15s, border-color 0.15s;
+	}
+	.reaction-chip:hover { transform: translateY(-1px); background: rgba(255,255,255,0.09); }
+	.reaction-chip:active { transform: scale(0.94); }
+	.reaction-chip.mine {
+		background: rgba(196,240,66,0.14);
+		border-color: rgba(196,240,66,0.45);
+		color: var(--color-brand, #c4f042);
+	}
+	.reaction-emoji { font-size: 0.9rem; line-height: 1; }
+	.reaction-count { font-variant-numeric: tabular-nums; }
+
+	.reaction-add-wrap { position: relative; display: inline-flex; }
+	.reaction-add {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 26px;
+		border-radius: 999px;
+		color: #64748b;
+		background: rgba(255,255,255,0.04);
+		border: 1px dashed rgba(255,255,255,0.14);
+		cursor: pointer;
+		transition: color 0.15s, border-color 0.15s;
+	}
+	.reaction-add:hover { color: var(--color-brand, #c4f042); border-color: rgba(196,240,66,0.4); }
+	.reaction-picker {
+		position: absolute;
+		bottom: calc(100% + 6px);
+		left: 0;
+		z-index: 10;
+		display: flex;
+		gap: 2px;
+		padding: 6px;
+		border-radius: 14px;
+		background: #0c0f1a;
+		border: 1px solid rgba(255,255,255,0.12);
+		box-shadow: 0 8px 28px rgba(0,0,0,0.5);
+	}
+	.reaction-picker-btn {
+		font-size: 1.15rem;
+		line-height: 1;
+		width: 34px;
+		height: 34px;
+		border-radius: 10px;
+		background: none;
+		border: none;
+		cursor: pointer;
+		transition: transform 0.12s var(--ease-spring, ease), background 0.15s;
+	}
+	.reaction-picker-btn:hover { transform: scale(1.25); background: rgba(255,255,255,0.08); }
+	.reaction-picker-btn.mine { background: rgba(196,240,66,0.16); }
+
+	/* ── Empty state ── */
+	.comments-empty {
+		text-align: center;
+		padding: 28px 16px;
+		border-radius: var(--r-md, 14px);
+		background: rgba(255,255,255,0.025);
+		border: 1px dashed rgba(255,255,255,0.1);
+	}
+	.comments-empty-emoji { font-size: 1.8rem; }
+	.comments-empty-title {
+		margin-top: 6px;
+		font-size: 0.95rem;
+		font-weight: 800;
+		color: #e6ecf4;
+	}
+	.comments-empty-sub {
+		margin-top: 3px;
+		font-size: 0.82rem;
+		color: #64748b;
+	}
+
 	.comment-form {
+		display: flex;
+		gap: 10px;
+		align-items: flex-start;
+	}
+	.comment-form-avatar {
+		width: 34px;
+		height: 34px;
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 0.74rem;
+		font-weight: 800;
+		color: #0c0f1a;
+		flex-shrink: 0;
+		box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+	}
+	.comment-form-main {
+		flex: 1;
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
 	}
+	.comment-form-footer {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.quick-prompts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+	.quick-prompt {
+		font-size: 0.74rem;
+		font-weight: 600;
+		color: #9fb0c3;
+		background: rgba(255,255,255,0.04);
+		border: 1px solid rgba(255,255,255,0.08);
+		border-radius: 999px;
+		padding: 5px 10px;
+		cursor: pointer;
+		transition: background 0.15s, color 0.15s;
+	}
+	.quick-prompt:hover { background: rgba(196,240,66,0.12); color: var(--color-brand, #c4f042); }
 	.comment-input {
 		width: 100%;
 		resize: none;
@@ -1498,21 +2374,21 @@
 		transition: border-color 0.15s;
 	}
 	.comment-input::placeholder { color: #475569; }
-	.comment-input:focus { border-color: rgba(163,230,53,0.4); }
+	.comment-input:focus { border-color: rgba(196,240,66,0.4); }
 
 	.btn-post {
-		align-self: flex-end;
-		padding: 12px 20px;
+		padding: 11px 22px;
 		border-radius: 12px;
 		font-size: 0.85rem;
-		font-weight: 700;
+		font-weight: 800;
 		color: #0c0f1a;
-		background: #a3e635;
+		background: var(--color-brand, #c4f042);
 		border: none;
 		cursor: pointer;
-		transition: background 0.15s;
+		transition: background 0.15s, transform 0.12s;
 	}
-	.btn-post:hover { background: #bef264; }
+	.btn-post:hover { background: #d4ff5c; }
+	.btn-post:active { transform: scale(0.96); }
 	.btn-post:disabled { opacity: 0.4; cursor: default; }
 
 	.login-prompt {
@@ -1520,7 +2396,7 @@
 		color: #64748b;
 	}
 	.login-prompt a {
-		color: #a3e635;
+		color: var(--color-brand, #c4f042);
 		text-decoration: none;
 		font-weight: 600;
 	}

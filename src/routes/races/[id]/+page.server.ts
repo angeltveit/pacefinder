@@ -6,6 +6,7 @@ import {
 	raceUserStatus,
 	raceResults,
 	comments,
+	commentReactions,
 	user
 } from '$lib/server/db/schema';import { eq, sql, and, isNull, asc, inArray } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
@@ -112,12 +113,36 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		.where(and(eq(comments.distanceId, params.id), isNull(comments.deletedAt)))
 		.orderBy(comments.createdAt);
 
+	// Load reactions for these comments and fold into counts + the viewer's own
+	const commentIds = commentRows.map((c) => c.id);
+	const reactionRows = commentIds.length
+		? await db
+				.select({
+					commentId: commentReactions.commentId,
+					emoji: commentReactions.emoji,
+					userId: commentReactions.userId
+				})
+				.from(commentReactions)
+				.where(inArray(commentReactions.commentId, commentIds))
+		: [];
+
+	const reactionMap = new Map<string, { counts: Record<string, number>; mine: string[] }>();
+	for (const id of commentIds) reactionMap.set(id, { counts: {}, mine: [] });
+	for (const row of reactionRows) {
+		const entry = reactionMap.get(row.commentId);
+		if (!entry) continue;
+		entry.counts[row.emoji] = (entry.counts[row.emoji] ?? 0) + 1;
+		if (userId && row.userId === userId) entry.mine.push(row.emoji);
+	}
+
 	return {
 		race: {
 			id: distance.id,
 			name: distance.name,
 			eventName: series.name,
 			distanceKm: distance.distanceKm,
+			elevationGainM: distance.elevationGainM,
+			surface: distance.surface,
 			medalStatus: distance.medalStatus,
 			registrationUrl: distance.registrationUrl,
 			resultsUrl: distance.resultsUrl,
@@ -125,7 +150,20 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			raceDate: edition.raceDate?.toISOString() ?? null,
 			location: edition.location,
 			registrationStatus: edition.registrationStatus,
+			registrationDeadline: edition.registrationDeadline?.toISOString() ?? null,
+			priceMin: edition.priceMin,
+			priceMax: edition.priceMax,
+			priceCurrency: edition.priceCurrency,
+			fieldSize: edition.fieldSize,
 			websiteUrl: edition.websiteUrl ?? series.websiteUrl,
+			raceDayInfo: (edition.raceDayInfo as {
+				address?: string | null;
+				startTimes?: string | null;
+				bibPickup?: string | null;
+				facilities?: string | null;
+				extras?: string | null;
+				medalNote?: string | null;
+			} | null) ?? null,
 			// Series-level fields
 			category: series.category,
 			city: series.city,
@@ -161,7 +199,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		myNotes: myStatusRow?.notes ?? null,
 		comments: commentRows.map((c) => ({
 			...c,
-			createdAt: c.createdAt.toISOString()
+			createdAt: c.createdAt.toISOString(),
+			reactions: reactionMap.get(c.id)?.counts ?? {},
+			myReactions: reactionMap.get(c.id)?.mine ?? []
 		}))
 	};
 };

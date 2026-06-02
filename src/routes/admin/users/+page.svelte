@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	let { data } = $props();
 	let users = $state(untrack(() => data.users));
+	const flagDefs = data.flagDefs;
 
 	async function toggleBlock(userId: string, blocked: boolean) {
 		const res = await fetch(`/api/admin/users/${userId}/block`, {
@@ -11,6 +12,24 @@
 		});
 		if (res.ok) {
 			users = users.map((u) => (u.id === userId ? { ...u, isBlocked: blocked } : u));
+		}
+	}
+
+	async function toggleFlag(userId: string, flag: string, enabled: boolean) {
+		// Optimistic update
+		users = users.map((u) =>
+			u.id === userId ? { ...u, flags: { ...u.flags, [flag]: enabled } } : u
+		);
+		const res = await fetch(`/api/admin/users/${userId}/flags`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ flag, enabled })
+		});
+		if (!res.ok) {
+			// Revert on failure
+			users = users.map((u) =>
+				u.id === userId ? { ...u, flags: { ...u.flags, [flag]: !enabled } } : u
+			);
 		}
 	}
 </script>
@@ -27,8 +46,12 @@
 					<th class="px-4 py-3">Name</th>
 					<th class="px-4 py-3">Email</th>
 					<th class="px-4 py-3">Role</th>
+					<th class="px-4 py-3">Gender</th>
 					<th class="px-4 py-3">Joined</th>
 					<th class="px-4 py-3">Status</th>
+					{#each flagDefs as f}
+						<th class="px-4 py-3 text-center" title={f.description}>{f.label}</th>
+					{/each}
 					<th class="px-4 py-3"></th>
 				</tr>
 			</thead>
@@ -43,6 +66,7 @@
 								{u.role}
 							</span>
 						</td>
+						<td class="px-4 py-3 text-slate-500 capitalize">{u.gender ?? '—'}</td>
 						<td class="px-4 py-3 text-slate-500 whitespace-nowrap">
 							{new Date(u.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
 						</td>
@@ -53,6 +77,24 @@
 								<span class="rounded-full bg-green-50 border border-green-200 px-2 py-0.5 text-xs text-green-700">Active</span>
 							{/if}
 						</td>
+						{#each flagDefs as f}
+							<td class="px-4 py-3 text-center">
+								<button
+									type="button"
+									role="switch"
+									aria-checked={u.flags[f.key]}
+									aria-label="{f.label} for {u.name}"
+									onclick={() => toggleFlag(u.id, f.key, !u.flags[f.key])}
+									class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors
+										{u.flags[f.key] ? 'bg-purple-600' : 'bg-slate-300'}"
+								>
+									<span
+										class="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform
+											{u.flags[f.key] ? 'translate-x-4' : 'translate-x-0.5'}"
+									></span>
+								</button>
+							</td>
+						{/each}
 						<td class="px-4 py-3">
 							{#if u.role !== 'admin'}
 								{#if u.isBlocked}

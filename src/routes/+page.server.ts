@@ -1,10 +1,14 @@
 import { db } from '$lib/server/db';
 import { raceSeries, raceEditions, raceDistances, raceUserStatus } from '$lib/server/db/schema';
 import { asc, desc, eq, sql, inArray } from 'drizzle-orm';
+import { isFeatureEnabled } from '$lib/server/featureFlags';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const userId = locals.user?.id ?? null;
+
+	const coachEnabled = userId ? await isFeatureEnabled(userId, 'ai_coach') : false;
+	const coachGender = (locals.user as { gender?: string | null } | null)?.gender ?? null;
 
 	const editionRows = await db
 		.select({
@@ -77,6 +81,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 
 	return {
+		coachEnabled,
+		coachGender,
 		events: editionRows.map((e) => {
 			const distances = distByEdition.get(e.editionId) ?? [];
 			return {

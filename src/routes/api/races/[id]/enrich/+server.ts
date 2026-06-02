@@ -45,6 +45,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 		sourceUrl: edition.sourceUrl ?? '',
 		medalStatus: distance.medalStatus as 'confirmed' | 'likely' | 'unclear',
 		registrationStatus: edition.registrationStatus as 'open' | 'opening_soon' | 'unknown' | 'closed',
+		raceDayInfo: (edition.raceDayInfo as ClassifiedRace['raceDayInfo']) ?? null,
 		whyItFits: series.whyItFits ?? '',
 		rawLlmOutput: edition.rawLlmOutput,
 		fingerprint: edition.editionFingerprint
@@ -69,6 +70,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	await db.update(raceEditions).set({
 		raceDate: enriched.raceDate ?? edition.raceDate,
 		websiteUrl: enriched.websiteUrl ?? edition.websiteUrl,
+		raceDayInfo: enriched.raceDayInfo ?? edition.raceDayInfo,
 		lastUpdatedAt: new Date()
 	}).where(eq(raceEditions.id, edition.id));
 

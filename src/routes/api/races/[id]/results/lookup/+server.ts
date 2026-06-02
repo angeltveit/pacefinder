@@ -1,14 +1,25 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { raceResults, raceDistances, raceEditions } from '$lib/server/db/schema';
-import { eq, and } from 'drizzle-orm';
-import { lookupBibResult } from '$lib/server/agent/results';
+import { eq, and, inArray, ilike } from 'drizzle-orm';
+import { lookupBibResult, lookupNameResult } from '$lib/server/agent/results';
 import type { RequestHandler } from './$types';
+
+type BibResult = {
+	position: number | null;
+	name: string;
+	bibNumber: string | null;
+	finishTime: string;
+	category: string | null;
+	categoryPosition: number | null;
+	club: string | null;
+	distance: string | null;
+};
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
 	if (!locals.user) error(401, 'Login required');
 
-	// Get all sibling distances in the same edition so bib lookup works across distances
+	// Get all sibling distances in the same edition so lookups work across distances
 	const thisDistance = await db.query.raceDistances.findFirst({ where: eq(raceDistances.id, params.id) });
 	const allDistanceIds: string[] = thisDistance
 		? (await db.select({ id: raceDistances.id })
@@ -33,9 +44,13 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 		club: r.club
 	}));
 
-	const bib = url.searchParams.get('bib')?.trim();
-	let bibResults: { position: number | null; name: string; bibNumber: string | null; finishTime: string; category: string | null; categoryPosition: number | null; club: string | null; distance: string | null }[] = [];
-	if (bib) {
+	// A query can be a bib number (`bib=` or numeric `q=`) or a runner name (`q=`).
+	const rawQuery = (url.searchParams.get('bib') ?? url.searchParams.get('q') ?? '').trim();
+	const isBib = /^\d+$/.test(rawQuery);
+	let bibResults: BibResult[] = [];
+
+	if (rawQuery && isBib) {
+		const bib = rawQuery;
 		// Check stored results for this distance first, then siblings
 		const inStored = results.find((r) => r.bibNumber?.trim() === bib);
 		if (inStored) {
@@ -44,7 +59,6 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 			// Try siblings in DB before doing a live timing provider lookup
 			const siblingIds = allDistanceIds.filter((id) => id !== params.id);
 			if (siblingIds.length > 0) {
-				const { inArray } = await import('drizzle-orm');
 				const siblingRows = await db
 					.select()
 					.from(raceResults)
@@ -77,8 +91,33 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 				}
 			}
 		}
+	} else if (rawQuery) {
+		// Name search across this distance + siblings (stored results first)
+		const nameRows = await db
+			.select()
+			.from(raceResults)
+			.where(and(inArray(raceResults.distanceId, allDistanceIds), ilike(raceResults.name, `%${rawQuery}%`)))
+			.orderBy(raceResults.position)
+			.limit(25);
+		bibResults = nameRows.map((r) => ({
+			position: r.position,
+			name: r.name,
+			bibNumber: r.bibNumber,
+			finishTime: r.finishTime ?? '',
+			category: r.category,
+			categoryPosition: r.categoryPosition,
+			club: r.club,
+			distance: r.distanceId === params.id ? null : r.distance
+		}));
+
+		// Stored results are only the top-20 leaderboard — fall back to a live
+		// provider search so we can find every finisher by name.
+		if (bibResults.length === 0) {
+			bibResults = await lookupNameResult(params.id, rawQuery);
+		}
 	}
 
 	return json({ results, bibResults });
 };
+
 

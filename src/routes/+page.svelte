@@ -16,128 +16,128 @@
 	const hasMedal = (e: Ev) => e.medalStatus === 'confirmed' || e.medalStatus === 'likely';
 	const isOpen = (e: Ev) => e.registrationStatus === 'open';
 
-	// Top relevance-ranked picks (location + distance + timing + popularity)
-	const topPicks = $derived(
-		personalized ? [...events].sort((a, b) => b.score - a.score) : []
-	);
+	// Build all sections in one pass with a shared `seen` set so each event
+	// appears in exactly ONE section — its highest-priority bucket.
+	const { sections, stats } = $derived.by(() => {
+		const seen = new Set<string>();
 
-	const nearYou = $derived(
-		prefs.hasHome
-			? events
-					.filter((e) => e.distanceFromHome != null && e.distanceFromHome <= prefs.travelRadiusKm)
-					.sort((a, b) => (a.distanceFromHome ?? 0) - (b.distanceFromHome ?? 0))
-			: []
-	);
-
-	const yourDistances = $derived(
-		prefs.targetDistances.length > 0
-			? events
-					.filter((e) => e.matchesTarget)
-					.sort((a, b) => b.score - a.score)
-			: []
-	);
-
-	const closingSoon = $derived(
-		events
-			.filter((e) => {
-				const d = daysUntil(e.raceDate);
-				return isOpen(e) && d !== null && d > 0 && d <= 45;
-			})
-			.sort((a, b) => (daysUntil(a.raceDate) ?? 0) - (daysUntil(b.raceDate) ?? 0))
-	);
-
-	const popular = $derived(
-		events.filter((e) => e.interestedCount > 0).sort((a, b) => b.interestedCount - a.interestedCount)
-	);
-
-	const medalRuns = $derived(events.filter((e) => hasMedal(e)));
-	const bucketList = $derived(
-		events.filter((e) => e.category === 'international' || (e.distanceFromHome ?? 0) > 600)
-	);
-	const freshFinds = $derived(
-		[...events].sort(
-			(a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime()
-		)
-	);
-
-	const sections = $derived(
-		[
-			{
-				id: 'top',
-				title: 'Top picks for you',
-				sub: 'Ranked by where you are, what you run and when',
-				icon: 'sparkles',
-				items: topPicks
-			},
-			{
-				id: 'near',
-				title: 'Near you',
-				sub: prefs.city
-					? `Within ${prefs.travelRadiusKm} km of ${prefs.city}`
-					: `Within ${prefs.travelRadiusKm} km of home`,
-				icon: 'route',
-				items: nearYou
-			},
-			{
-				id: 'distances',
-				title: 'Your distances',
-				sub: 'Races at the lengths you love',
-				icon: 'zap',
-				items: yourDistances
-			},
-			{
-				id: 'closing',
-				title: 'Closing soon',
-				sub: 'Lock these in before registration shuts',
-				icon: 'flame',
-				items: closingSoon
-			},
-			{
-				id: 'popular',
-				title: 'Popular right now',
-				sub: 'Races other runners are eyeing',
-				icon: 'users',
-				items: popular
-			},
-			{
-				id: 'medals',
-				title: 'Medal runs',
-				sub: 'Finish-line bling guaranteed',
-				icon: 'medal',
-				items: medalRuns
-			},
-			{
-				id: 'bucket',
-				title: 'Bucket list',
-				sub: 'The races worth crossing borders for',
-				icon: 'plane',
-				items: bucketList
-			},
-			{
-				id: 'fresh',
-				title: 'Just discovered',
-				sub: 'Fresh finds from your race scout',
-				icon: 'sparkles',
-				items: freshFinds
+		/** Pull up to `limit` unseen events from `pool`, marking them seen. */
+		function take(pool: Ev[], limit = Infinity): Ev[] {
+			const out: Ev[] = [];
+			for (const e of pool) {
+				if (seen.has(e.primaryId)) continue;
+				seen.add(e.primaryId);
+				out.push(e);
+				if (out.length >= limit) break;
 			}
-		].filter((s) => s.items.length > 0)
-	);
+			return out;
+		}
 
-	const stats = $derived(
-		personalized
+		const byScore = [...events].sort((a, b) => b.score - a.score);
+		const byDate  = [...events].sort((a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime());
+
+		const result: { id: string; title: string; sub: string; icon: string; items: Ev[] }[] = [];
+
+		if (personalized) {
+			// When the user has a home location, respect their travel radius as a hard filter
+			// across ALL local sections. Only the Bucket list deliberately shows far events.
+			const withinRadius = (e: Ev) =>
+				!prefs.hasHome || (e.distanceFromHome != null && e.distanceFromHome <= prefs.travelRadiusKm);
+
+			const localByScore = byScore.filter(withinRadius);
+
+			// 1. Top picks — best 12 within radius (score drives order)
+			const top = take(localByScore, 12);
+			if (top.length) result.push({ id: 'top', title: 'Top picks for you', sub: 'Ranked by distance from you, your distances and timing', icon: 'sparkles', items: top });
+
+			// 2. Near you — races within travel radius, sorted nearest first
+			if (prefs.hasHome) {
+				const near = take(
+					events
+						.filter(withinRadius)
+						.sort((a, b) => (a.distanceFromHome ?? 0) - (b.distanceFromHome ?? 0))
+				);
+				if (near.length) result.push({
+					id: 'near', title: 'Near you',
+					sub: prefs.city ? `Within ${prefs.travelRadiusKm} km of ${prefs.city}` : `Within ${prefs.travelRadiusKm} km of home`,
+					icon: 'route', items: near
+				});
+			}
+
+			// 3. Your distances — races within radius matching favourite distance types
+			if (prefs.targetDistances.length > 0) {
+				const dist = take(localByScore.filter((e) => e.matchesTarget));
+				if (dist.length) result.push({ id: 'distances', title: 'Your distances', sub: 'Races at the lengths you love', icon: 'zap', items: dist });
+			}
+
+			// 4. Closing soon — open registrations within radius ending within 45 days
+			const closing = take(
+				events
+					.filter((e) => { const d = daysUntil(e.raceDate); return withinRadius(e) && isOpen(e) && d != null && d > 0 && d <= 45; })
+					.sort((a, b) => (daysUntil(a.raceDate) ?? 0) - (daysUntil(b.raceDate) ?? 0))
+			);
+			if (closing.length) result.push({ id: 'closing', title: 'Closing soon', sub: 'Lock these in before registration shuts', icon: 'flame', items: closing });
+
+			// 5. Bucket list — explicitly far/international (outside radius or >600 km)
+			const bucket = take(
+				events
+					.filter((e) => e.category === 'international' || (e.distanceFromHome ?? 0) > 600)
+					.sort((a, b) => b.score - a.score)
+			);
+			if (bucket.length) result.push({ id: 'bucket', title: 'Bucket list', sub: 'The races worth crossing borders for', icon: 'plane', items: bucket });
+
+			// 6. Anything local not yet surfaced, capped at 8
+			const rest = take(localByScore, 8);
+			if (rest.length) result.push({ id: 'fresh', title: 'More nearby', sub: 'Other races within your range', icon: 'search', items: rest });
+
+		} else {
+			// Non-personalised curation
+			const closing = take(
+				events
+					.filter((e) => { const d = daysUntil(e.raceDate); return isOpen(e) && d != null && d > 0 && d <= 45; })
+					.sort((a, b) => (daysUntil(a.raceDate) ?? 0) - (daysUntil(b.raceDate) ?? 0))
+			);
+			if (closing.length) result.push({ id: 'closing', title: 'Closing soon', sub: 'Lock these in before registration shuts', icon: 'flame', items: closing });
+
+			const popular = take(
+				events.filter((e) => e.interestedCount > 0).sort((a, b) => b.interestedCount - a.interestedCount)
+			);
+			if (popular.length) result.push({ id: 'popular', title: 'Popular right now', sub: 'Races other runners are eyeing', icon: 'users', items: popular });
+
+			const medals = take(events.filter((e) => hasMedal(e)));
+			if (medals.length) result.push({ id: 'medals', title: 'Medal runs', sub: 'Finish-line bling guaranteed', icon: 'medal', items: medals });
+
+			const bucket = take(events.filter((e) => e.category === 'international'));
+			if (bucket.length) result.push({ id: 'bucket', title: 'Bucket list', sub: 'The races worth crossing borders for', icon: 'plane', items: bucket });
+
+			const fresh = take(byDate, 12);
+			if (fresh.length) result.push({ id: 'fresh', title: 'Just discovered', sub: 'Fresh finds from your race scout', icon: 'sparkles', items: fresh });
+		}
+
+		// Compute stats from the raw (pre-dedup) derived counts
+		const nearCount  = prefs.hasHome ? events.filter((e) => e.distanceFromHome != null && e.distanceFromHome <= prefs.travelRadiusKm).length : 0;
+		const distCount  = events.filter((e) => e.matchesTarget && (!prefs.hasHome || (e.distanceFromHome != null && e.distanceFromHome <= prefs.travelRadiusKm))).length;
+		const closeCount = events.filter((e) => { const d = daysUntil(e.raceDate); return isOpen(e) && d != null && d > 0 && d <= 45; }).length;
+		const bucketRaw  = events.filter((e) => e.category === 'international' || (e.distanceFromHome ?? 0) > 600).length;
+		const medalCount = events.filter((e) => hasMedal(e)).length;
+		const popCount   = events.filter((e) => e.interestedCount > 0).length;
+
+		const stats = personalized
 			? [
-					{ icon: 'route', label: 'Near you', value: nearYou.length },
-					{ icon: 'zap', label: 'Your distances', value: yourDistances.length },
-					{ icon: 'flame', label: 'Closing soon', value: closingSoon.length },
-					{ icon: 'plane', label: 'Bucket list', value: bucketList.length }
+					{ icon: 'route', label: 'Near you',       value: nearCount },
+					{ icon: 'zap',   label: 'Your distances', value: distCount },
+					{ icon: 'flame', label: 'Closing soon',   value: closeCount },
+					{ icon: 'plane', label: 'Bucket list',    value: bucketRaw }
 				]
 			: [
-					{ icon: 'flame', label: 'Closing soon', value: closingSoon.length },
-					{ icon: 'medal', label: 'Medal runs', value: medalRuns.length },
-					{ icon: 'users', label: 'Popular', value: popular.length },
-					{ icon: 'plane', label: 'Bucket list', value: bucketList.length }
-				]
-	);
+					{ icon: 'flame', label: 'Closing soon', value: closeCount },
+					{ icon: 'medal', label: 'Medal runs',   value: medalCount },
+					{ icon: 'users', label: 'Popular',      value: popCount },
+					{ icon: 'plane', label: 'Bucket list',  value: bucketRaw }
+				];
+
+		return { sections: result, stats };
+	});
 
 	const cap = 8;
 </script>

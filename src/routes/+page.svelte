@@ -6,10 +6,36 @@
 
 	let { data } = $props();
 	let events = $state(data.events);
+	const prefs = $derived(data.prefs);
+	const personalized = $derived(prefs.hasHome || prefs.targetDistances.length > 0);
+
+	// Keep local state in sync when SvelteKit re-runs the load (e.g. after saving prefs).
+	$effect(() => { events = data.events; });
 
 	type Ev = (typeof events)[number];
 	const hasMedal = (e: Ev) => e.medalStatus === 'confirmed' || e.medalStatus === 'likely';
 	const isOpen = (e: Ev) => e.registrationStatus === 'open';
+
+	// Top relevance-ranked picks (location + distance + timing + popularity)
+	const topPicks = $derived(
+		personalized ? [...events].sort((a, b) => b.score - a.score) : []
+	);
+
+	const nearYou = $derived(
+		prefs.hasHome
+			? events
+					.filter((e) => e.distanceFromHome != null && e.distanceFromHome <= prefs.travelRadiusKm)
+					.sort((a, b) => (a.distanceFromHome ?? 0) - (b.distanceFromHome ?? 0))
+			: []
+	);
+
+	const yourDistances = $derived(
+		prefs.targetDistances.length > 0
+			? events
+					.filter((e) => e.matchesTarget)
+					.sort((a, b) => b.score - a.score)
+			: []
+	);
 
 	const closingSoon = $derived(
 		events
@@ -19,9 +45,15 @@
 			})
 			.sort((a, b) => (daysUntil(a.raceDate) ?? 0) - (daysUntil(b.raceDate) ?? 0))
 	);
-	const medalRuns = $derived(events.filter((e) => e.category === 'local' && hasMedal(e)));
-	const weekendTrips = $derived(events.filter((e) => e.category === 'norway'));
-	const bucketList = $derived(events.filter((e) => e.category === 'international'));
+
+	const popular = $derived(
+		events.filter((e) => e.interestedCount > 0).sort((a, b) => b.interestedCount - a.interestedCount)
+	);
+
+	const medalRuns = $derived(events.filter((e) => hasMedal(e)));
+	const bucketList = $derived(
+		events.filter((e) => e.category === 'international' || (e.distanceFromHome ?? 0) > 600)
+	);
 	const freshFinds = $derived(
 		[...events].sort(
 			(a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime()
@@ -31,6 +63,29 @@
 	const sections = $derived(
 		[
 			{
+				id: 'top',
+				title: 'Top picks for you',
+				sub: 'Ranked by where you are, what you run and when',
+				icon: 'sparkles',
+				items: topPicks
+			},
+			{
+				id: 'near',
+				title: 'Near you',
+				sub: prefs.city
+					? `Within ${prefs.travelRadiusKm} km of ${prefs.city}`
+					: `Within ${prefs.travelRadiusKm} km of home`,
+				icon: 'route',
+				items: nearYou
+			},
+			{
+				id: 'distances',
+				title: 'Your distances',
+				sub: 'Races at the lengths you love',
+				icon: 'zap',
+				items: yourDistances
+			},
+			{
 				id: 'closing',
 				title: 'Closing soon',
 				sub: 'Lock these in before registration shuts',
@@ -38,18 +93,18 @@
 				items: closingSoon
 			},
 			{
+				id: 'popular',
+				title: 'Popular right now',
+				sub: 'Races other runners are eyeing',
+				icon: 'users',
+				items: popular
+			},
+			{
 				id: 'medals',
-				title: 'Medal runs near you',
+				title: 'Medal runs',
 				sub: 'Finish-line bling guaranteed',
 				icon: 'medal',
 				items: medalRuns
-			},
-			{
-				id: 'trips',
-				title: 'Worth the trip',
-				sub: 'Nordic weekenders & destination races',
-				icon: 'mountain',
-				items: weekendTrips
 			},
 			{
 				id: 'bucket',
@@ -68,12 +123,21 @@
 		].filter((s) => s.items.length > 0)
 	);
 
-	const stats = $derived([
-		{ icon: 'flame', label: 'Closing soon', value: closingSoon.length },
-		{ icon: 'medal', label: 'Medal runs', value: medalRuns.length },
-		{ icon: 'mountain', label: 'Weekend trips', value: weekendTrips.length },
-		{ icon: 'plane', label: 'Bucket list', value: bucketList.length }
-	]);
+	const stats = $derived(
+		personalized
+			? [
+					{ icon: 'route', label: 'Near you', value: nearYou.length },
+					{ icon: 'zap', label: 'Your distances', value: yourDistances.length },
+					{ icon: 'flame', label: 'Closing soon', value: closingSoon.length },
+					{ icon: 'plane', label: 'Bucket list', value: bucketList.length }
+				]
+			: [
+					{ icon: 'flame', label: 'Closing soon', value: closingSoon.length },
+					{ icon: 'medal', label: 'Medal runs', value: medalRuns.length },
+					{ icon: 'users', label: 'Popular', value: popular.length },
+					{ icon: 'plane', label: 'Bucket list', value: bucketList.length }
+				]
+	);
 
 	const cap = 8;
 </script>
@@ -85,12 +149,21 @@
 {/if}
 
 <section class="hero pf-rise">
-	<span class="hero-eyebrow"><Icon name="zap" size={13} fill /> Your race coach has been busy</span>
+	<span class="hero-eyebrow">
+		<Icon name="zap" size={13} fill />
+		{personalized ? 'Tuned to your runs' : 'Your race coach has been busy'}
+	</span>
 	<h1 class="hero-title">
 		<span class="num">{events.length}</span>
 		{events.length === 1 ? 'race' : 'races'} worth your attention
 	</h1>
-	<p class="hero-sub">Hand-picked upcoming runs across the Nordics — and a few worth flying for.</p>
+	<p class="hero-sub">
+		{#if personalized && prefs.city}
+			Personalized for {prefs.city} — closest, most relevant runs first.
+		{:else}
+			Hand-picked upcoming runs across the Nordics — and a few worth flying for.
+		{/if}
+	</p>
 
 	<div class="stat-strip">
 		{#each stats as s}
@@ -102,6 +175,17 @@
 		{/each}
 	</div>
 </section>
+
+{#if data.user && !personalized}
+	<a href="/profile" class="personalize-cta pf-rise">
+		<span class="pc-ic"><Icon name="route" size={18} /></span>
+		<span class="pc-text">
+			<strong>Make this feed yours.</strong>
+			Set your location and favourite distances to see the closest, most relevant races first.
+		</span>
+		<Icon name="arrow-right" size={16} />
+	</a>
+{/if}
 
 {#if events.length === 0}
 	<div class="empty">
@@ -212,6 +296,47 @@
 	.stat-lab {
 		font-size: 0.82rem;
 		color: var(--text-muted);
+	}
+
+	/* ── Personalize prompt ── */
+	.personalize-cta {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		margin: 22px auto 0;
+		max-width: 640px;
+		padding: 16px 18px;
+		border-radius: 16px;
+		background: rgba(196, 240, 66, 0.07);
+		border: 1px solid rgba(196, 240, 66, 0.25);
+		text-decoration: none;
+		color: var(--text-strong);
+		transition: all 0.15s var(--ease-out);
+	}
+	.personalize-cta:hover {
+		background: rgba(196, 240, 66, 0.12);
+		transform: translateY(-2px);
+	}
+	.pc-ic {
+		display: grid;
+		place-items: center;
+		flex-shrink: 0;
+		width: 38px;
+		height: 38px;
+		border-radius: 11px;
+		background: rgba(196, 240, 66, 0.15);
+		color: var(--color-brand);
+	}
+	.pc-text {
+		flex: 1;
+		font-size: 0.88rem;
+		color: var(--text-muted);
+		line-height: 1.4;
+	}
+	.pc-text strong {
+		color: var(--text-strong);
+		display: block;
+		margin-bottom: 2px;
 	}
 
 	/* ── Sections ── */

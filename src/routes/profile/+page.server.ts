@@ -2,10 +2,16 @@ import { redirect } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { raceSeries, raceEditions, raceUserStatus, user } from '$lib/server/db/schema';
 import { eq, desc, sql } from 'drizzle-orm';
+import { forwardGeocode } from '$lib/server/geo';
 import type { PageServerLoad, Actions } from './$types';
+
+const DISTANCE_OPTIONS = ['5k', '10k', 'half', 'marathon', 'ultra', 'trail'] as const;
+const AMBITION_OPTIONS = ['casual', 'improver', 'competitive'] as const;
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+
+	const me = await db.query.user.findFirst({ where: eq(user.id, locals.user.id) });
 
 	const triaged = await db
 		.select({
@@ -49,9 +55,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 				firstSeenAt: t.firstSeenAt.toISOString()
 			}
 		})),
-		userCity: locals.user.city ?? '',
-		userCountry: locals.user.country ?? 'NO',
-		userGender: (locals.user as { gender?: string | null }).gender ?? ''
+		userCity: me?.city ?? '',
+		userCountry: me?.country ?? 'NO',
+		userGender: (me as { gender?: string | null } | undefined)?.gender ?? '',
+		userTravelRadiusKm: me?.travelRadiusKm ?? 150,
+		userTargetDistances: (me?.targetDistances as string[] | null) ?? [],
+		userAmbition: me?.ambition ?? '',
+		hasCoords: me?.homeLat != null && me?.homeLng != null
 	};
 };
 
@@ -64,7 +74,46 @@ export const actions: Actions = {
 		const genderRaw = (form.get('gender') as string)?.trim() || '';
 		const gender = ['male', 'female', 'other'].includes(genderRaw) ? genderRaw : null;
 
-		await db.update(user).set({ city, country, gender }).where(eq(user.id, locals.user.id));
+		const radiusRaw = parseInt((form.get('travelRadiusKm') as string) ?? '', 10);
+		const travelRadiusKm = Number.isFinite(radiusRaw)
+			? Math.min(2000, Math.max(5, radiusRaw))
+			: 150;
+
+		const targetDistances = (form.getAll('targetDistances') as string[]).filter((d) =>
+			DISTANCE_OPTIONS.includes(d as (typeof DISTANCE_OPTIONS)[number])
+		);
+
+		const ambitionRaw = (form.get('ambition') as string)?.trim() || '';
+		const ambition = AMBITION_OPTIONS.includes(ambitionRaw as (typeof AMBITION_OPTIONS)[number])
+			? ambitionRaw
+			: null;
+
+		// Geocode the home city so the "For You" feed can rank by real distance.
+		let homeLat: number | null = null;
+		let homeLng: number | null = null;
+		if (city) {
+			const place = await forwardGeocode(country ? `${city}, ${country}` : city);
+			if (place) {
+				homeLat = place.lat;
+				homeLng = place.lng;
+			}
+		}
+
+		const patch: Record<string, unknown> = {
+			city,
+			country,
+			gender,
+			travelRadiusKm,
+			targetDistances,
+			ambition
+		};
+		// Only overwrite coords when we successfully geocoded (don't wipe a good GPS fix).
+		if (homeLat != null && homeLng != null) {
+			patch.homeLat = homeLat;
+			patch.homeLng = homeLng;
+		}
+
+		await db.update(user).set(patch).where(eq(user.id, locals.user.id));
 		return { success: true };
 	}
 };

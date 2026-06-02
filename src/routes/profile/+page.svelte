@@ -1,6 +1,84 @@
 <script lang="ts">
 	let { data } = $props();
 
+	const distanceOptions = [
+		{ value: '5k', label: '5K' },
+		{ value: '10k', label: '10K' },
+		{ value: 'half', label: 'Half' },
+		{ value: 'marathon', label: 'Marathon' },
+		{ value: 'ultra', label: 'Ultra' },
+		{ value: 'trail', label: 'Trail' }
+	];
+	const ambitionOptions = [
+		{ value: '', label: 'No preference' },
+		{ value: 'casual', label: 'Casual — just for fun' },
+		{ value: 'improver', label: 'Improver — chasing PBs' },
+		{ value: 'competitive', label: 'Competitive — racing to win' }
+	];
+
+	// Local editable copies for the location form
+	let city = $state(data.userCity);
+	let country = $state(data.userCountry);
+	let travelRadiusKm = $state(data.userTravelRadiusKm);
+	let selectedDistances = $state(new Set(data.userTargetDistances));
+	let locating = $state(false);
+	let locateMsg = $state('');
+
+	// Re-sync local copies when load re-runs (e.g. after saving the form)
+	$effect(() => {
+		city = data.userCity;
+		country = data.userCountry;
+		travelRadiusKm = data.userTravelRadiusKm;
+		selectedDistances = new Set(data.userTargetDistances);
+	});
+
+	function toggleDistance(value: string) {
+		const next = new Set(selectedDistances);
+		if (next.has(value)) next.delete(value);
+		else next.add(value);
+		selectedDistances = next;
+	}
+
+	async function detectLocation() {
+		if (typeof navigator === 'undefined' || !navigator.geolocation) {
+			locateMsg = 'Geolocation not supported in this browser.';
+			return;
+		}
+		locating = true;
+		locateMsg = '';
+		navigator.geolocation.getCurrentPosition(
+			async (pos) => {
+				try {
+					const res = await fetch('/api/profile/locate', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							lat: pos.coords.latitude,
+							lng: pos.coords.longitude
+						})
+					});
+					const out = await res.json();
+					if (res.ok) {
+						if (out.city) city = out.city;
+						if (out.country) country = out.country;
+						locateMsg = `Pinned to ${out.city ?? 'your location'} ✓`;
+					} else {
+						locateMsg = 'Could not save your location.';
+					}
+				} catch {
+					locateMsg = 'Could not save your location.';
+				} finally {
+					locating = false;
+				}
+			},
+			() => {
+				locating = false;
+				locateMsg = 'Location permission denied.';
+			},
+			{ enableHighAccuracy: false, timeout: 10_000, maximumAge: 600_000 }
+		);
+	}
+
 	const statusGroups = ['attending', 'interested', 'following', 'seen', 'skip'] as const;
 	const statusLabels: Record<string, string> = {
 		attending: '🏁 Attending',
@@ -47,21 +125,65 @@
 		<h1 class="profile-title">My Profile</h1>
 	</div>
 
-	<!-- Location settings -->
+	<!-- Location & preferences -->
 	<form class="location-form" method="POST" action="?/updateLocation">
-		<h2 class="section-label">📍 My Location</h2>
+		<div class="section-head">
+			<h2 class="section-label">📍 My Location</h2>
+			<button type="button" class="detect-btn" onclick={detectLocation} disabled={locating}>
+				{locating ? 'Locating…' : 'Use my current location'}
+			</button>
+		</div>
 		<div class="location-fields">
-			<input type="text" name="city" placeholder="City (e.g. Oslo)" value={data.userCity} class="loc-input" />
-			<input type="text" name="country" placeholder="Country code (e.g. NO)" value={data.userCountry} maxlength="2" class="loc-input loc-country" />
+			<input type="text" name="city" placeholder="City (e.g. Oslo)" bind:value={city} class="loc-input" />
+			<input type="text" name="country" placeholder="Country (e.g. NO)" bind:value={country} maxlength="2" class="loc-input loc-country" />
 			<select name="gender" value={data.userGender} class="loc-input loc-gender">
 				<option value="">Gender (optional)</option>
 				<option value="male">Male</option>
 				<option value="female">Female</option>
 				<option value="other">Other</option>
 			</select>
-			<button type="submit" class="loc-save">Save</button>
 		</div>
-		<p class="loc-hint">Location personalizes "Local" vs "Travel"; gender lets the coach hype you up properly</p>
+		{#if locateMsg}<p class="locate-msg">{locateMsg}</p>{/if}
+
+		<h2 class="section-label pref-label">🏃 How far will you travel?</h2>
+		<div class="radius-row">
+			<input
+				type="range"
+				name="travelRadiusKm"
+				min="10"
+				max="1000"
+				step="10"
+				bind:value={travelRadiusKm}
+				class="radius-slider"
+			/>
+			<span class="radius-val">{travelRadiusKm} km</span>
+		</div>
+
+		<h2 class="section-label pref-label">🎯 Favourite distances</h2>
+		<div class="chip-group">
+			{#each distanceOptions as d}
+				<label class="dist-chip {selectedDistances.has(d.value) ? 'on' : ''}">
+					<input
+						type="checkbox"
+						name="targetDistances"
+						value={d.value}
+						checked={selectedDistances.has(d.value)}
+						onchange={() => toggleDistance(d.value)}
+					/>
+					{d.label}
+				</label>
+			{/each}
+		</div>
+
+		<h2 class="section-label pref-label">🔥 Ambition</h2>
+		<select name="ambition" value={data.userAmbition} class="loc-input ambition-select">
+			{#each ambitionOptions as a}
+				<option value={a.value}>{a.label}</option>
+			{/each}
+		</select>
+
+		<button type="submit" class="loc-save">Save preferences</button>
+		<p class="loc-hint">Your location, travel radius and favourite distances power the "For You" feed.</p>
 	</form>
 
 	<div class="profile-header">
@@ -291,5 +413,95 @@
 		margin: 8px 0 0;
 		font-size: 0.75rem;
 		color: rgba(255,255,255,0.35);
+	}
+	.section-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+	.detect-btn {
+		padding: 7px 14px;
+		border-radius: 999px;
+		font-size: 0.78rem;
+		font-weight: 600;
+		color: #a3e635;
+		background: rgba(163,230,53,0.1);
+		border: 1px solid rgba(163,230,53,0.3);
+		cursor: pointer;
+		transition: background 0.15s;
+	}
+	.detect-btn:hover:not(:disabled) {
+		background: rgba(163,230,53,0.18);
+	}
+	.detect-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.locate-msg {
+		margin: 8px 0 0;
+		font-size: 0.78rem;
+		color: #a3e635;
+	}
+	.pref-label {
+		margin-top: 20px;
+		font-size: 0.85rem;
+	}
+	.radius-row {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+	}
+	.radius-slider {
+		flex: 1;
+		accent-color: #a3e635;
+		cursor: pointer;
+	}
+	.radius-val {
+		flex: 0 0 auto;
+		font-size: 0.85rem;
+		font-weight: 700;
+		color: #a3e635;
+		min-width: 64px;
+		text-align: right;
+	}
+	.chip-group {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+	.dist-chip {
+		display: inline-flex;
+		align-items: center;
+		padding: 8px 16px;
+		border-radius: 999px;
+		font-size: 0.82rem;
+		font-weight: 600;
+		color: rgba(255,255,255,0.7);
+		background: rgba(255,255,255,0.05);
+		border: 1.5px solid rgba(255,255,255,0.1);
+		cursor: pointer;
+		user-select: none;
+		transition: all 0.15s;
+	}
+	.dist-chip.on {
+		color: #0c0f1a;
+		background: #a3e635;
+		border-color: #a3e635;
+	}
+	.dist-chip input {
+		position: absolute;
+		opacity: 0;
+		width: 0;
+		height: 0;
+	}
+	.ambition-select {
+		flex: none;
+		width: 100%;
+		max-width: 340px;
+	}
+	.loc-save {
+		margin-top: 22px;
 	}
 </style>

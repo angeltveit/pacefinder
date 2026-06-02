@@ -26,6 +26,9 @@ export const raceSeries = pgTable('race_series', {
 	category: text('category').notNull(),
 	city: text('city').notNull(),
 	country: text('country').notNull().default('NO'),
+	/** Geocoded coordinates of the host city, for distance-based personalization */
+	lat: real('lat'),
+	lng: real('lng'),
 	/** Series-level website (may be overridden per edition) */
 	websiteUrl: text('website_url'),
 	imageUrl: text('image_url'),

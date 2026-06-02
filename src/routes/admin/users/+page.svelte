@@ -3,6 +3,18 @@
 	let { data } = $props();
 	let users = $state(untrack(() => data.users));
 	const flagDefs = data.flagDefs;
+	const currentUserId = data.user?.id;
+
+	async function changeRole(userId: string, role: string) {
+		const res = await fetch(`/api/admin/users/${userId}/role`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ role })
+		});
+		if (res.ok) {
+			users = users.map((u) => (u.id === userId ? { ...u, role } : u));
+		}
+	}
 
 	async function toggleBlock(userId: string, blocked: boolean) {
 		const res = await fetch(`/api/admin/users/${userId}/block`, {
@@ -61,10 +73,19 @@
 						<td class="px-4 py-3 font-medium text-slate-900">{u.name}</td>
 						<td class="px-4 py-3 text-slate-600">{u.email}</td>
 						<td class="px-4 py-3">
-							<span class="rounded-full px-2 py-0.5 text-xs font-medium
-								{u.role === 'admin' ? 'bg-purple-50 text-purple-700' : 'bg-slate-100 text-slate-600'}">
-								{u.role}
-							</span>
+							{#if u.id === currentUserId}
+								<span class="rounded-full px-2 py-0.5 text-xs font-medium bg-purple-50 text-purple-700">{u.role}</span>
+							{:else}
+								<select
+									value={u.role}
+									onchange={(e) => changeRole(u.id, (e.target as HTMLSelectElement).value)}
+									class="text-xs rounded-full px-2 py-0.5 font-medium border-0 cursor-pointer
+										{u.role === 'admin' ? 'bg-purple-50 text-purple-700' : 'bg-slate-100 text-slate-600'}"
+								>
+									<option value="user">user</option>
+									<option value="admin">admin</option>
+								</select>
+							{/if}
 						</td>
 						<td class="px-4 py-3 text-slate-500 capitalize">{u.gender ?? '—'}</td>
 						<td class="px-4 py-3 text-slate-500 whitespace-nowrap">

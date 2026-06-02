@@ -21,8 +21,6 @@ export const actions: Actions = {
 
 		try {
 			await auth.api.signUpEmail({ body: { name, email, password } });
-			await incrStat(KEYS.USERS_TOTAL);
-			await incrStat(KEYS.USERS_NEW_24H);
 		} catch (err: unknown) {
 			// better-auth may throw an APIError, Response, or plain Error
 			let msg = '';
@@ -37,6 +35,10 @@ export const actions: Actions = {
 			}
 			return fail(400, { message: 'Registration failed. Please try again.' });
 		}
+
+		// Stats are best-effort — don't let Redis failures break signup.
+		incrStat(KEYS.USERS_TOTAL).catch(() => {});
+		incrStat(KEYS.USERS_NEW_24H).catch(() => {});
 
 		redirect(302, '/');
 	}

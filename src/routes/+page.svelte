@@ -39,10 +39,10 @@
 		const result: { id: string; title: string; sub: string; icon: string; items: Ev[] }[] = [];
 
 		if (personalized) {
-			// When the user has a home location, respect their travel radius as a hard filter
-			// across ALL local sections. Only the Bucket list deliberately shows far events.
+			// Hard-filter by travel radius only for events where we KNOW the distance.
+			// Events with no coordinates pass through (unknown location beats showing nothing).
 			const withinRadius = (e: Ev) =>
-				!prefs.hasHome || (e.distanceFromHome != null && e.distanceFromHome <= prefs.travelRadiusKm);
+				!prefs.hasHome || e.distanceFromHome == null || e.distanceFromHome <= prefs.travelRadiusKm;
 
 			const localByScore = byScore.filter(withinRadius);
 
@@ -59,7 +59,9 @@
 				);
 				if (near.length) result.push({
 					id: 'near', title: 'Near you',
-					sub: prefs.city ? `Within ${prefs.travelRadiusKm} km of ${prefs.city}` : `Within ${prefs.travelRadiusKm} km of home`,
+					sub: prefs.city
+						? (prefs.travelRadiusKm >= 9999 ? `Races near ${prefs.city} — no distance limit` : `Within ${prefs.travelRadiusKm} km of ${prefs.city}`)
+						: (prefs.travelRadiusKm >= 9999 ? 'No distance limit' : `Within ${prefs.travelRadiusKm} km of home`),
 					icon: 'route', items: near
 				});
 			}

@@ -5,6 +5,18 @@
 	let { user }: { user: { id: string; name: string; email: string; role: string } | null } =
 		$props();
 
+	let signingOut = $state(false);
+
+	async function signOut() {
+		signingOut = true;
+		try {
+			await fetch('/api/signout', { method: 'POST' });
+		} catch {
+			// ignore network errors — cookies cleared server-side anyway
+		}
+		window.location.replace('/login');
+	}
+
 	let menuOpen = $state(false);
 
 	const links = $derived(
@@ -12,7 +24,7 @@
 			{ href: '/', label: 'For You', match: (p: string) => p === '/', show: true },
 			{
 				href: '/followed',
-				label: 'Followed races',
+					label: 'My races',
 				match: (p: string) => p.startsWith('/followed'),
 				show: !!user
 			},
@@ -25,55 +37,57 @@
 
 <header class="nav-header">
 	<nav class="nav-inner">
-		<a href="/" class="logo">
-			<span class="logo-mark"><Icon name="zap" size={16} fill /></span>
-			<span class="logo-text">PaceFinder</span>
-		</a>
+		<div class="nav-top">
+			<a href="/" class="logo">
+				<span class="logo-mark"><Icon name="zap" size={14} fill /></span>
+				<span class="logo-text">PaceFinder</span>
+			</a>
 
-		<div class="nav-links">
-			{#each links as l}
-				<a href={l.href} class="nav-link {l.match(page.url.pathname) ? 'active' : ''}">{l.label}</a>
-			{/each}
-			{#if user?.role === 'admin'}
-				<a href="/admin" class="nav-link {page.url.pathname.startsWith('/admin') ? 'active' : ''}"
-					>Admin</a
-				>
-			{/if}
+			<div class="nav-right">
+				{#if user}
+					<div class="avatar-wrap">
+						<button
+							class="avatar-btn"
+							onclick={(e) => {
+								e.stopPropagation();
+								menuOpen = !menuOpen;
+							}}
+							aria-label="Account menu"
+						>
+							{user.name.charAt(0).toUpperCase()}
+						</button>
+						{#if menuOpen}
+							<div class="dropdown" role="menu">
+								<div class="dropdown-header">
+									<p class="dropdown-name">{user.name}</p>
+									<p class="dropdown-email">{user.email}</p>
+								</div>
+								<a href="/profile" class="dropdown-item">Profile &amp; preferences</a>
+								{#if user.role === 'admin'}
+									<a href="/admin" class="dropdown-item">Admin</a>
+								{/if}
+								<button type="button" class="dropdown-item logout" disabled={signingOut} onclick={signOut}>
+									{signingOut ? 'Signing out…' : 'Sign out'}
+								</button>
+							</div>
+						{/if}
+					</div>
+				{:else}
+					<a href="/login" class="login-link">Log in</a>
+					<a href="/register" class="signup-btn">Get started</a>
+				{/if}
+			</div>
 		</div>
 
-		<div class="nav-right">
-			{#if user}
-				<div class="avatar-wrap">
-					<button
-						class="avatar-btn"
-						onclick={(e) => {
-							e.stopPropagation();
-							menuOpen = !menuOpen;
-						}}
-						aria-label="Account menu"
-					>
-						{user.name.charAt(0).toUpperCase()}
-					</button>
-					{#if menuOpen}
-						<div class="dropdown" role="menu">
-							<div class="dropdown-header">
-								<p class="dropdown-name">{user.name}</p>
-								<p class="dropdown-email">{user.email}</p>
-							</div>
-							<a href="/profile" class="dropdown-item">Profile &amp; preferences</a>
-							{#if user.role === 'admin'}
-								<a href="/admin" class="dropdown-item">Admin</a>
-							{/if}
-							<form method="POST" action="/auth/signout">
-								<button type="submit" class="dropdown-item logout">Sign out</button>
-							</form>
-						</div>
-					{/if}
-				</div>
-			{:else}
-				<a href="/login" class="login-link">Log in</a>
-				<a href="/register" class="signup-btn">Get started</a>
-			{/if}
+		<div class="nav-bottom">
+			<div class="nav-links">
+				{#each links as l}
+					<a href={l.href} class="nav-link {l.match(page.url.pathname) ? 'active' : ''}">{l.label}</a>
+				{/each}
+				{#if user?.role === 'admin'}
+					<a href="/admin" class="nav-link {page.url.pathname.startsWith('/admin') ? 'active' : ''}">Admin</a>
+				{/if}
+			</div>
 		</div>
 	</nav>
 </header>
@@ -91,30 +105,39 @@
 		max-width: 1180px;
 		margin: 0 auto;
 		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 10px 20px 8px;
+	}
+	.nav-top {
+		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 12px 20px;
+	}
+	.nav-bottom {
+		display: flex;
+		justify-content: center;
 	}
 
 	.logo {
 		display: flex;
 		align-items: center;
-		gap: 9px;
+		gap: 7px;
 		text-decoration: none;
 	}
 	.logo-mark {
 		display: grid;
 		place-items: center;
-		width: 30px;
-		height: 30px;
-		border-radius: 9px;
+		width: 26px;
+		height: 26px;
+		border-radius: 7px;
 		color: #0a0e17;
 		background: linear-gradient(135deg, var(--color-brand-bright), var(--color-brand-dim));
-		box-shadow: 0 4px 14px rgba(196, 240, 66, 0.35);
+		box-shadow: 0 3px 10px rgba(196, 240, 66, 0.3);
 	}
 	.logo-text {
 		font-family: var(--font-display);
-		font-size: 1.15rem;
+		font-size: 1rem;
 		font-weight: 700;
 		color: var(--text-strong);
 		letter-spacing: -0.02em;
@@ -135,6 +158,7 @@
 		font-weight: 600;
 		color: var(--text-muted);
 		text-decoration: none;
+		white-space: nowrap;
 		transition: all 0.15s var(--ease-out);
 	}
 	.nav-link:hover {
@@ -253,7 +277,8 @@
 			display: none;
 		}
 		.nav-link {
-			padding: 7px 12px;
+			padding: 7px 10px;
+			font-size: 0.8rem;
 		}
 	}
 </style>

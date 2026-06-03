@@ -1,5 +1,19 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	let { data } = $props();
+
+	// ── Account section ───────────────────────────────────────────────────
+	let nameInput = $state(data.userName);
+	let editingName = $state(false);
+	let nameError = $state('');
+	let nameSaved = $state(false);
+
+	let showChangePassword = $state(false);
+	let currentPassword = $state('');
+	let newPassword = $state('');
+	let confirmPassword = $state('');
+	let pwError = $state('');
+	let pwSaved = $state(false);
 
 	const distanceOptions = [
 		{ value: '5k', label: '5K' },
@@ -19,17 +33,32 @@
 	// Local editable copies for the location form
 	let city = $state(data.userCity);
 	let country = $state(data.userCountry);
-	let travelRadiusKm = $state(data.userTravelRadiusKm);
 	let selectedDistances = $state(new Set(data.userTargetDistances));
 	let locating = $state(false);
 	let locateMsg = $state('');
+
+	const RADIUS_STOPS  = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 9999];
+	const RADIUS_LABELS = ['5 km','10 km','15 km','20 km','25 km','30 km','35 km','40 km','45 km','50 km','55 km','60 km','65 km','70 km','75 km','80 km','85 km','90 km','95 km','100 km','∞ No limit'];
+	const MAX_IDX = RADIUS_STOPS.length - 1;
+
+	function findRadiusIdx(km: number): number {
+		const idx = RADIUS_STOPS.reduce(
+			(best, stop, i) => (Math.abs(stop - km) < Math.abs(RADIUS_STOPS[best] - km) ? i : best),
+			0
+		);
+		return idx;
+	}
+
+	let radiusIndex = $state(findRadiusIdx(data.userTravelRadiusKm));
+	const travelRadiusKm = $derived(RADIUS_STOPS[radiusIndex]);
 
 	// Re-sync local copies when load re-runs (e.g. after saving the form)
 	$effect(() => {
 		city = data.userCity;
 		country = data.userCountry;
-		travelRadiusKm = data.userTravelRadiusKm;
+		radiusIndex = findRadiusIdx(data.userTravelRadiusKm);
 		selectedDistances = new Set(data.userTargetDistances);
+		nameInput = data.userName;
 	});
 
 	function toggleDistance(value: string) {
@@ -125,6 +154,91 @@
 		<h1 class="profile-title">My Profile</h1>
 	</div>
 
+	<!-- Account details -->
+	<div class="account-card">
+		<h2 class="section-label">👤 Account</h2>
+
+		<!-- Name -->
+		<div class="account-row">
+			<span class="account-field-label">Name</span>
+			{#if editingName}
+				<form
+					method="POST"
+					action="?/updateName"
+					class="account-inline-form"
+					use:enhance={({ formData }) => {
+						nameError = '';
+						nameSaved = false;
+						return async ({ result, update }) => {
+							if (result.type === 'failure') {
+								nameError = (result.data as { nameError?: string })?.nameError ?? 'Error saving name.';
+							} else {
+								nameSaved = true;
+								editingName = false;
+								setTimeout(() => nameSaved = false, 3000);
+								await update();
+							}
+						};
+					}}
+				>
+					<input class="account-input" name="name" bind:value={nameInput} maxlength="80" required />
+					<button type="submit" class="btn-account-save">Save</button>
+					<button type="button" class="btn-account-cancel" onclick={() => { editingName = false; nameInput = data.userName; }}>✕</button>
+				</form>
+				{#if nameError}<p class="account-error">{nameError}</p>{/if}
+			{:else}
+				<span class="account-value">{data.userName}</span>
+				<button class="btn-account-edit" onclick={() => { nameInput = data.userName; editingName = true; }}>Edit</button>
+				{#if nameSaved}<span class="account-saved">Saved ✓</span>{/if}
+			{/if}
+		</div>
+
+		<!-- Email (read-only) -->
+		<div class="account-row">
+			<span class="account-field-label">Email</span>
+			<span class="account-value account-value-muted">{data.userEmail}</span>
+		</div>
+
+		<!-- Change password -->
+		<div class="account-row account-row-pw">
+			<span class="account-field-label">Password</span>
+			<button class="btn-account-edit" onclick={() => { showChangePassword = !showChangePassword; pwError = ''; pwSaved = false; }}>
+				{showChangePassword ? 'Cancel' : 'Change'}
+			</button>
+		</div>
+		{#if showChangePassword}
+			<form
+				method="POST"
+				action="?/changePassword"
+				class="pw-form"
+				use:enhance={() => {
+					pwError = '';
+					pwSaved = false;
+					return async ({ result, update }) => {
+						if (result.type === 'failure') {
+							pwError = (result.data as { pwError?: string })?.pwError ?? 'Could not change password.';
+						} else {
+							pwSaved = true;
+							showChangePassword = false;
+							currentPassword = '';
+							newPassword = '';
+							confirmPassword = '';
+							setTimeout(() => pwSaved = false, 4000);
+							await update();
+						}
+					};
+				}}
+			>
+				<input class="account-input" type="password" name="currentPassword" bind:value={currentPassword} placeholder="Current password" autocomplete="current-password" required />
+				<input class="account-input" type="password" name="newPassword" bind:value={newPassword} placeholder="New password (min 8 chars)" autocomplete="new-password" required minlength="8" />
+				<input class="account-input" type="password" name="confirmPassword" bind:value={confirmPassword} placeholder="Confirm new password" autocomplete="new-password" required />
+				{#if pwError}<p class="account-error">{pwError}</p>{/if}
+				<button type="submit" class="btn-account-save">Update password</button>
+			</form>
+		{/if}
+		{#if pwSaved}<p class="account-saved">Password updated ✓</p>{/if}
+	</div>
+
 	<!-- Location & preferences -->
 	<form class="location-form" method="POST" action="?/updateLocation">
 		<div class="section-head">
@@ -147,16 +261,17 @@
 
 		<h2 class="section-label pref-label">🏃 How far will you travel?</h2>
 		<div class="radius-row">
+			<input type="hidden" name="travelRadiusKm" value={travelRadiusKm} />
 			<input
 				type="range"
-				name="travelRadiusKm"
-				min="10"
-				max="1000"
-				step="10"
-				bind:value={travelRadiusKm}
+				min="0"
+				max={MAX_IDX}
+				step="1"
+				bind:value={radiusIndex}
+				style="--pct: {(radiusIndex / MAX_IDX * 100).toFixed(1)}%"
 				class="radius-slider"
 			/>
-			<span class="radius-val">{travelRadiusKm} km</span>
+			<span class="radius-val">{RADIUS_LABELS[radiusIndex]}</span>
 		</div>
 
 		<h2 class="section-label pref-label">🎯 Favourite distances</h2>
@@ -366,6 +481,105 @@
 		border-radius: 16px;
 		padding: 20px;
 	}
+	.account-card {
+		background: rgba(255,255,255,0.03);
+		border: 1.5px solid rgba(255,255,255,0.08);
+		border-radius: 16px;
+		padding: 20px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.account-row {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		min-height: 38px;
+	}
+	.account-row-pw { margin-top: 4px; }
+	.account-field-label {
+		font-size: 0.78rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.07em;
+		color: rgba(255,255,255,0.35);
+		min-width: 68px;
+	}
+	.account-value {
+		font-size: 0.95rem;
+		font-weight: 600;
+		color: #f1f5f9;
+		flex: 1;
+	}
+	.account-value-muted { color: rgba(255,255,255,0.45); }
+	.account-inline-form {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex: 1;
+	}
+	.account-input {
+		flex: 1;
+		padding: 8px 12px;
+		border-radius: 9px;
+		background: rgba(255,255,255,0.07);
+		border: 1px solid rgba(255,255,255,0.14);
+		color: white;
+		font-size: 0.92rem;
+		font-weight: 600;
+	}
+	.account-input::placeholder { color: rgba(255,255,255,0.28); }
+	.pw-form {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 12px 0 4px;
+	}
+	.btn-account-save {
+		padding: 7px 14px;
+		border-radius: 9px;
+		background: #a3e635;
+		color: #0c0f1a;
+		font-weight: 800;
+		font-size: 0.82rem;
+		border: none;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.btn-account-save:hover { background: #bef264; }
+	.btn-account-edit {
+		padding: 5px 12px;
+		border-radius: 8px;
+		background: rgba(255,255,255,0.06);
+		color: rgba(255,255,255,0.55);
+		font-size: 0.8rem;
+		font-weight: 600;
+		border: 1px solid rgba(255,255,255,0.1);
+		cursor: pointer;
+		transition: all 0.15s;
+	}
+	.btn-account-edit:hover { color: white; background: rgba(255,255,255,0.1); }
+	.btn-account-cancel {
+		padding: 6px 10px;
+		border-radius: 8px;
+		background: transparent;
+		color: rgba(255,255,255,0.35);
+		font-size: 0.85rem;
+		border: 1px solid rgba(255,255,255,0.08);
+		cursor: pointer;
+	}
+	.btn-account-cancel:hover { color: #f87171; }
+	.account-error {
+		font-size: 0.8rem;
+		color: #f87171;
+		margin: 0;
+		padding-left: 80px;
+	}
+	.account-saved {
+		font-size: 0.8rem;
+		color: #a3e635;
+		font-weight: 600;
+	}
 	.section-label {
 		font-size: 0.95rem;
 		font-weight: 700;
@@ -455,7 +669,25 @@
 	}
 	.radius-slider {
 		flex: 1;
-		accent-color: #a3e635;
+		-webkit-appearance: none;
+		appearance: none;
+		height: 4px;
+		border-radius: 2px;
+		outline: none;
+		cursor: pointer;
+		background: linear-gradient(
+			to right,
+			#a3e635 var(--pct, 0%),
+			rgba(163, 230, 53, 0.15) var(--pct, 0%)
+		);
+	}
+	.radius-slider::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		width: 18px;
+		height: 18px;
+		border-radius: 50%;
+		background: #a3e635;
+		box-shadow: 0 0 0 3px rgba(163, 230, 53, 0.2);
 		cursor: pointer;
 	}
 	.radius-val {

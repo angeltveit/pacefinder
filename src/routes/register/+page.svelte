@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
+
 	let loading = $state(false);
 	let error = $state('');
 </script>
@@ -20,24 +22,14 @@
 		<form
 			method="POST"
 			class="space-y-4"
-			onsubmit={async (e) => {
-				e.preventDefault();
+			use:enhance={({ formData }) => {
 				loading = true;
 				error = '';
-				const form = e.currentTarget as HTMLFormElement;
-				const res = await fetch('/register', { method: 'POST', body: new FormData(form) });
-				loading = false;
-				if (res.redirected) window.location.href = res.url;
-				else {
-					try {
-						const data = await res.json();
-						// SvelteKit action responses wrap data in { type, data } or return raw
-						const msg = data?.data?.message ?? data?.message ?? null;
-						error = typeof msg === 'string' ? msg : 'Registration failed';
-					} catch {
-						error = 'Registration failed';
-					}
-				}
+				return async ({ result, update }) => {
+					loading = false;
+					if (result.type === 'failure') error = String(result.data?.message ?? 'Registration failed');
+					else update();
+				};
 			}}
 		>
 			<div>

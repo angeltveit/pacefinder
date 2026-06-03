@@ -40,6 +40,6 @@ export const actions: Actions = {
 		incrStat(KEYS.USERS_TOTAL).catch(() => {});
 		incrStat(KEYS.USERS_NEW_24H).catch(() => {});
 
-		redirect(302, '/');
+		redirect(302, '/onboard');
 	}
 };

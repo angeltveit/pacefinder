@@ -839,6 +839,12 @@ export async function lookupBibResult(
 		return fetchEqTimingBibSearch(eqMatch[1], normalizedBib);
 	}
 
+	// RaceResult.com: search results tab, fall back to participants tab
+	const rrMatch = race.resultsUrl.match(/my\.raceresult\.com\/(\d+)/i);
+	if (rrMatch) {
+		return fetchRaceResultBibSearch(rrMatch[1], normalizedBib);
+	}
+
 	return [];
 }
 
@@ -868,6 +874,11 @@ export async function lookupNameResult(
 	const eqMatch = dist.resultsUrl.match(/live\.eqtiming\.com\/(\d+)/i);
 	if (eqMatch) {
 		return fetchEqTimingNameSearch(eqMatch[1], q);
+	}
+
+	const rrMatch = dist.resultsUrl.match(/my\.raceresult\.com\/(\d+)/i);
+	if (rrMatch) {
+		return fetchRaceResultNameSearch(rrMatch[1], q);
 	}
 
 	return [];
@@ -970,6 +981,141 @@ async function fetchEqTimingNameSearch(
 	}
 
 	return results;
+}
+
+type RaceResultRow = string[];
+
+type RaceResultEntry = {
+	position: number | null;
+	name: string;
+	bibNumber: string | null;
+	finishTime: string;
+	category: string | null;
+	categoryPosition: number | null;
+	club: string | null;
+	distance: string | null;
+};
+
+/**
+ * Shared helper: fetches a RaceResult list tab, searches by `term`, and returns parsed rows.
+ */
+async function fetchRaceResultList(
+	eventId: string,
+	tab: string,
+	term: string
+): Promise<RaceResultEntry[]> {
+	const configRes = await fetch(
+		`https://my.raceresult.com/${eventId}/${tab}/config?lang=en&noVisitor=1`,
+		{
+			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)' },
+			signal: AbortSignal.timeout(10_000)
+		}
+	).catch(() => null);
+	if (!configRes?.ok) return [];
+
+	const config = await configRes.json() as {
+		key?: string;
+		server?: string;
+		Tab?: { Config?: { Lists?: Array<{ Name: string; Live?: number }> } };
+	};
+	const key = config.key;
+	const server = config.server ? `https://${config.server}` : 'https://my.raceresult.com';
+	const lists: Array<{ Name: string; Live?: number }> = config.Tab?.Config?.Lists ?? [];
+	if (!key || lists.length === 0) return [];
+
+	// Pick best list for results tab (prefer Overall/non-live); for participants take first
+	const bestList = tab === 'results'
+		? (lists.find(l => l.Live === 0 && /overall|total|all|resultat/i.test(l.Name)) ??
+		   lists.find(l => l.Live === 0 && !/top.?\d|gun|kjønn|gender|aldersgruppe/i.test(l.Name)) ??
+		   lists[0])
+		: lists[0];
+
+	const params = new URLSearchParams({
+		key,
+		listname: bestList.Name,
+		contest: '0',
+		r: 'search',
+		term,
+		lang: 'en',
+		noVisitor: '1'
+	});
+
+	const listRes = await fetch(`${server}/${eventId}/${tab}/list?${params}`, {
+		headers: {
+			'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)',
+			Cookie: `ys${eventId}=1`
+		},
+		signal: AbortSignal.timeout(10_000)
+	}).catch(() => null);
+	if (!listRes?.ok) return [];
+
+	const listData = await listRes.json() as {
+		DataFields?: string[];
+		data?: Record<string, RaceResultRow[]>;
+	};
+
+	const dataFields = listData.DataFields ?? [];
+	const bibIdx = dataFields.findIndex(f => f === 'BIB');
+	const nameIdx = dataFields.findIndex(f => /DisplayName|Name/i.test(f));
+	const finishIdx = dataFields.findIndex(f => /FINISH\.CHIP|WithStatus.*FINISH/i.test(f));
+	const lastDataIdx = dataFields.length - 1 -
+		[...dataFields].reverse().findIndex(f => !/^SWITCH\(|^C\(/.test(f));
+
+	const entries: RaceResultEntry[] = [];
+	for (const [contestKey, rows] of Object.entries(listData.data ?? {})) {
+		const distLabel = contestKey.replace(/^#\d+_/, '').replace(/_/g, ' ') || null;
+		for (const row of rows) {
+			const name = nameIdx >= 0 ? (row[nameIdx] ?? '') : (row[2] ?? row[3] ?? '');
+			const bib = bibIdx >= 0 ? row[bibIdx] : row[0];
+			const rawTime = finishIdx >= 0 ? row[finishIdx] : (row[lastDataIdx] ?? row[10] ?? '');
+			const finishTime = /^[A-Z(]/.test(rawTime ?? '') ? '' : (rawTime ?? '');
+			entries.push({
+				position: null,
+				name,
+				bibNumber: bib || null,
+				finishTime,
+				category: null,
+				categoryPosition: null,
+				club: null,
+				distance: distLabel
+			});
+			if (entries.length >= 25) return entries;
+		}
+	}
+	return entries;
+}
+
+/**
+ * Searches RaceResult.com for a specific bib number.
+ * Tries the results tab first (post-race), then falls back to the participants tab (pre-race).
+ */
+async function fetchRaceResultBibSearch(eventId: string, bib: string): Promise<RaceResultEntry[]> {
+	// Results tab first (for completed races)
+	const fromResults = await fetchRaceResultList(eventId, 'results', bib);
+	const matched = fromResults.filter(e => e.bibNumber?.trim() === bib);
+	if (matched.length > 0) return matched;
+
+	// Participants tab (pre-race / no results yet)
+	const fromParticipants = await fetchRaceResultList(eventId, 'participants', bib);
+	return fromParticipants.filter(e => e.bibNumber?.trim() === bib);
+}
+
+/**
+ * Searches RaceResult.com (my.raceresult.com) for finishers whose name contains `queryLower`.
+ * Searches the results tab first; falls back to the participants tab if no results yet.
+ */
+async function fetchRaceResultNameSearch(
+	eventId: string,
+	queryLower: string
+): Promise<RaceResultEntry[]> {
+	const fromResults = (await fetchRaceResultList(eventId, 'results', queryLower))
+		.filter(e => e.name && nameMatchesQuery(e.name, queryLower));
+	if (fromResults.length > 0) return fromResults;
+
+	// Pre-race: results don't exist yet — search participants list instead
+	const fromParticipants = (await fetchRaceResultList(eventId, 'participants', queryLower))
+		.filter(e => e.name && nameMatchesQuery(e.name, queryLower));
+	return fromParticipants;
 }
 
 

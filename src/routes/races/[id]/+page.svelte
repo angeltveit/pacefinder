@@ -46,6 +46,8 @@
 	});
 
 	let bibLookupDone = $state(false);
+	let autoSearching = $state(false);
+	let autoSearchDone = $state(false); // true after first auto-search attempt completes
 
 	// ── Search any bib in the race ────────────────────────────────────────
 	let searchBib = $state('');
@@ -83,7 +85,7 @@
 	// ── Category theming ──────────────────────────────────────────────────
 	import Icon from '$lib/components/Icon.svelte';
 	import TopoArt from '$lib/components/TopoArt.svelte';
-	import { categoryTheme, proxyImage, raceNarrative, raceHighlights, avatar } from '$lib/theme';
+	import { categoryTheme, proxyImage, raceNarrative, raceHighlights, avatar, shortDate, distanceLabel } from '$lib/theme';
 
 	let heroImgOk = $state(true);
 	const theme = $derived(categoryTheme(data.race.category));
@@ -131,12 +133,44 @@
 	async function setStatus(status: string | null) {
 		const prev = myStatus;
 		myStatus = status;
+
+		// Fire name-search immediately in parallel with status save so the
+		// "Searching…" indicator appears right away without waiting for the API.
+		const searchPromise = (status === 'attending' && !myBib && data.user?.name)
+			? autoSearchBibByName()
+			: null;
+
 		const res = await fetch(`/api/races/${data.race.id}/status`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ status, bibNumber: myBib || null })
 		});
-		if (!res.ok) myStatus = prev;
+		if (!res.ok) { myStatus = prev; return; }
+
+		await searchPromise;
+	}
+
+	async function autoSearchBibByName() {
+		const name = data.user?.name;
+		if (!name) return;
+		autoSearching = true;
+		autoSearchDone = false;
+		bibResults = [];
+		try {
+			const res = await fetch(`/api/races/${data.race.id}/results/lookup?q=${encodeURIComponent(name)}`);
+			if (res.ok) {
+				const json = await res.json() as { results: typeof data.results; bibResults: typeof bibResults };
+				results = json.results;
+				bibResults = json.bibResults;
+				// Pre-fill bib input if exactly one match found
+				if (json.bibResults.length === 1 && json.bibResults[0].bibNumber) {
+					bibInput = json.bibResults[0].bibNumber;
+				}
+			}
+		} finally {
+			autoSearching = false;
+			autoSearchDone = true;
+		}
 	}
 
 	async function saveBib() {
@@ -387,6 +421,15 @@
 	const medal = $derived(medalText(data.race.medalStatus));
 	const reg = $derived(regText(data.race.registrationStatus));
 	const catLabel = $derived(categoryLabel(data.race.category, data.race.distanceKm));
+	const dateChip = $derived(shortDate(data.race.raceDate));
+	const closingSoon = $derived(
+		data.race.registrationStatus === 'open' && !isPast && deadlineDays != null && deadlineDays <= 30
+	);
+	const allKm = $derived(
+		[...new Set([data.race.distanceKm, ...data.siblings.map(s => s.distanceKm)])]
+			.filter(Boolean)
+			.sort((a, b) => (a ?? 0) - (b ?? 0))
+	);
 
 	// ── Key facts ─────────────────────────────────────────────────────────
 	function fmtPrice(min: number | null, max: number | null, cur: string | null): string | null {
@@ -480,12 +523,12 @@
 
 <svelte:head><title>{data.race.eventName} — PaceFinder</title></svelte:head>
 
-<div class="detail-page">
+<div class="detail-page" style="--accent:{theme.color}; --soft:{theme.soft};">
 	<!-- Back link -->
 	<a href="/races" class="back-link"><Icon name="chevron-right" size={15} class="back-ic" /> Back to races</a>
 
 	<!-- ═══ Hero header ═══ -->
-	<div class="hero pf-rise" style="--accent:{theme.color}; --soft:{theme.soft};">
+	<div class="hero pf-rise">
 		{#if data.race.imageUrl && heroImgOk}
 			<img class="hero-img" src={heroImg} alt={data.race.eventName} onerror={() => heroImgOk = false} />
 			<div class="hero-overlay"></div>
@@ -494,13 +537,26 @@
 			<div class="hero-overlay hero-overlay-soft"></div>
 		{/if}
 
-		<div class="hero-content">
+		<div class="hero-top">
 			<div class="hero-cat"><Icon name={theme.icon as never} size={14} /> {catLabel}</div>
+			{#if dateChip}
+				<div class="hero-date">
+					<strong>{dateChip.day}</strong>
+					<small>{dateChip.month}</small>
+				</div>
+			{/if}
 		</div>
 
-		{#if data.race.medalStatus === 'confirmed' || data.race.medalStatus === 'likely'}
-			<div class="hero-medal"><Icon name="medal" size={20} /></div>
-		{/if}
+		<div class="hero-bottom">
+			{#if data.race.medalStatus === 'confirmed' || data.race.medalStatus === 'likely'}
+				<span class="hero-tag hero-tag-medal"><Icon name="medal" size={13} /> {data.race.medalStatus === 'confirmed' ? 'Medal' : 'Medal likely'}</span>
+			{/if}
+			{#if closingSoon && deadlineDays != null}
+				<span class="hero-tag hero-tag-urgent"><Icon name="flame" size={13} /> Closes in {deadlineDays}d</span>
+			{:else if data.race.registrationStatus === 'open'}
+				<span class="hero-tag hero-tag-open"><span class="dot"></span> Open</span>
+			{/if}
+		</div>
 	</div>
 
 	<!-- ═══ Main content ═══ -->
@@ -511,19 +567,18 @@
 			{#if data.race.location && data.race.location !== data.race.city}
 				· {data.race.location}
 			{/if}
+			<span class="sep">·</span>
+			<Icon name="calendar" size={15} /> {formatDate(data.race.raceDate)}
 		</p>
-		<p class="meta"><Icon name="calendar" size={15} /> {formatDate(data.race.raceDate)}</p>
 
-		<!-- Status chips -->
-		<div class="chips">
-			{#if medal}
-				<span class="chip chip-gold"><Icon name="medal" size={13} /> {medal}</span>
-			{/if}
-			{#if reg}
-				<span class="chip {reg.cls}">{reg.text}</span>
-			{/if}
-			<span class="chip chip-muted"><Icon name="heart" size={13} /> {data.interestedCount} interested</span>
-		</div>
+		<!-- Distance chips -->
+		{#if allKm.length > 0}
+			<div class="dist-row">
+				{#each allKm as km}
+					<span class="dist">{distanceLabel(km)}</span>
+				{/each}
+			</div>
+		{/if}
 
 		<!-- Key facts -->
 		{#if facts.length > 0}
@@ -542,10 +597,7 @@
 
 		<!-- Verdict -->
 		{#if data.race.whyItFits}
-			<div class="verdict">
-				<p class="verdict-label">PaceFinder verdict</p>
-				<p class="verdict-text">"{data.race.whyItFits}"</p>
-			</div>
+			<p class="verdict">"{data.race.whyItFits}"</p>
 		{/if}
 
 		<!-- Actions -->
@@ -556,26 +608,39 @@
 						class="btn-status {myStatus === 'interested' ? 'active' : ''}"
 						onclick={() => setStatus(myStatus === 'interested' ? null : 'interested')}
 					>
-						{myStatus === 'interested' ? '❤️' : '🤍'} Follow
+						<Icon name="heart" size={16} fill={myStatus === 'interested'} /> {myStatus === 'interested' ? 'Following' : 'Follow'}
+						{#if data.interestedCount > 0}<span class="btn-count">{data.interestedCount}</span>{/if}
 					</button>
 					<button
 						class="btn-status btn-attending {myStatus === 'attending' ? 'active' : ''}"
 						onclick={() => setStatus(myStatus === 'attending' ? null : 'attending')}
 					>
-						{myStatus === 'attending' ? '🏃' : '🎽'} Attending
+						<Icon name="ticket" size={16} /> {myStatus === 'attending' ? 'Attending' : 'I\'m going'}
 					</button>
 				</div>
 
 				{#if myStatus === 'attending'}
 					<div class="bib-section">
-						{#if myBib && !editingBib}
+						{#if autoSearching}
+							<div class="bib-searching">
+								<Icon name="search" size={14} /> Searching for your results…
+							</div>
+						{:else if myBib && !editingBib}
 							<div class="bib-display">
 								<span class="bib-display-label">BIB</span>
 								<span class="bib-display-number">#{myBib}</span>
 								<button class="btn-bib-edit" onclick={() => { bibInput = myBib; editingBib = true; }} title="Edit BIB number">✎</button>
 							</div>
 						{:else}
-							<label class="bib-label">My BIB number</label>
+							{#if bibResults.length > 0 && !myBib}
+								<div class="bib-autofound">
+									<Icon name="sparkles" size={13} /> Found: <strong>{bibResults[0].name}</strong> · BIB #{bibResults[0].bibNumber ?? '?'}
+								</div>
+							{:else if autoSearchDone && bibResults.length === 0}
+								<p class="bib-no-result">No results found yet — enter your BIB manually once they're published.</p>
+							{:else}
+								<label class="bib-label">My BIB number</label>
+							{/if}
 							<div class="bib-row">
 								<input
 									type="text"
@@ -632,17 +697,23 @@
 									{:else}#{result.position}
 									{/if}
 								</span>
-								<span class="my-result-time">{result.finishTime}</span>
+								<span class="my-result-time">{result.finishTime || '—'}</span>
 								{#if result.category}
 									<span class="my-result-cat">{result.category}</span>
 								{/if}
 							</div>
-							<div class="my-result-distance">
-								{#if result.distance}
-									{result.distance}
-								{:else if data.race.distanceKm}
-									{data.race.distanceKm} km
+							<div class="my-result-meta">
+								<span class="my-result-name">{result.name}</span>
+								{#if result.bibNumber || myBib}
+									<span class="my-result-bib">BIB #{result.bibNumber ?? myBib}</span>
 								{/if}
+								<span class="my-result-dist">
+									{#if result.distance}
+										{result.distance}
+									{:else if data.race.distanceKm}
+										{data.race.distanceKm} km
+									{/if}
+								</span>
 							</div>
 						</div>
 					{/each}
@@ -729,7 +800,7 @@
 	{/if}
 
 	<!-- ═══ Find a runner by BIB ═══ -->
-	{#if data.user && (results.length > 0 || data.race.resultsUrl)}
+	{#if data.user && (results.length > 0 || (data.race.resultsUrl && isPast))}
 		<div class="bib-search-card">
 			<h3 class="bib-search-title">🔍 Find a runner</h3>
 			<p class="bib-search-sub">Search by BIB number or runner name to see their result.</p>
@@ -777,7 +848,13 @@
 					</div>
 				{/each}
 			{:else if searchDone}
-				<p class="bib-search-empty">No runner found matching "{searchBib.trim()}".</p>
+				<p class="bib-search-empty">
+					{#if !isPast}
+						Results aren't published yet — check back after the race.
+					{:else}
+						No runner found matching "{searchBib.trim()}".
+					{/if}
+				</p>
 			{/if}
 		</div>
 	{/if}
@@ -1105,6 +1182,10 @@
 		transition: color 0.15s;
 	}
 	.back-link:hover { color: white; }
+	.back-link :global(.back-ic) {
+		transform: rotate(180deg);
+		vertical-align: -2px;
+	}
 
 	/* ── Hero ── */
 	.hero {
@@ -1113,8 +1194,9 @@
 		border-radius: var(--r-lg);
 		overflow: hidden;
 		display: flex;
-		align-items: flex-end;
-		padding: 20px;
+		flex-direction: column;
+		justify-content: space-between;
+		padding: 12px;
 		border: 1px solid var(--line);
 	}
 	.hero-img {
@@ -1139,52 +1221,89 @@
 	.hero-overlay-soft {
 		background: linear-gradient(to bottom, rgba(7,10,18,0.05) 0%, rgba(7,10,18,0.55) 100%);
 	}
-	.hero-content {
+	.hero-top,
+	.hero-bottom {
 		position: relative;
 		z-index: 3;
 		display: flex;
-		flex-direction: column;
+		align-items: center;
 		gap: 6px;
+	}
+	.hero-top {
+		justify-content: space-between;
+	}
+	.hero-bottom {
+		flex-wrap: wrap;
 	}
 	.hero-cat {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		background: rgba(10,14,23,0.55);
+		background: rgba(10,14,23,0.6);
 		backdrop-filter: blur(10px);
 		border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 		border-radius: 999px;
-		padding: 6px 14px;
-		font-size: 0.8rem;
+		padding: 5px 11px;
+		font-size: 0.74rem;
 		font-weight: 700;
 		color: var(--accent);
-		width: fit-content;
 	}
-	.hero-medal {
-		position: absolute;
-		top: 16px;
-		right: 18px;
-		z-index: 3;
-		display: flex;
+	.hero-date {
+		display: inline-flex;
+		flex-direction: column;
 		align-items: center;
-		justify-content: center;
-		width: 40px;
-		height: 40px;
-		border-radius: 50%;
-		background: rgba(10,14,23,0.6);
+		line-height: 1;
+		min-width: 46px;
+		padding: 6px 8px;
+		border-radius: 12px;
+		background: rgba(10,14,23,0.62);
+		border: 1px solid var(--line-strong);
 		backdrop-filter: blur(8px);
-		border: 1px solid rgba(251,191,36,0.45);
-		color: #fbbf24;
-		animation: bounce-soft 2.4s ease-in-out infinite;
 	}
-	@keyframes bounce-soft {
-		0%, 100% { transform: translateY(0); }
-		50% { transform: translateY(-4px); }
+	.hero-date strong {
+		font-family: var(--font-display);
+		font-size: 1.05rem;
+		font-weight: 700;
+		color: #fff;
 	}
-
-	.back-link :global(.back-ic) {
-		transform: rotate(180deg);
-		vertical-align: -2px;
+	.hero-date small {
+		font-size: 0.6rem;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		color: var(--text-muted);
+		margin-top: 2px;
+	}
+	.hero-tag {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 10px;
+		border-radius: 999px;
+		font-size: 0.72rem;
+		font-weight: 700;
+		backdrop-filter: blur(8px);
+	}
+	.hero-tag-medal {
+		color: #fde68a;
+		background: rgba(251,191,36,0.16);
+		border: 1px solid rgba(251,191,36,0.35);
+	}
+	.hero-tag-open {
+		color: #86efac;
+		background: rgba(34,197,94,0.16);
+		border: 1px solid rgba(34,197,94,0.32);
+	}
+	.hero-tag-open .dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: #4ade80;
+		box-shadow: 0 0 8px #4ade80;
+	}
+	.hero-tag-urgent {
+		color: #ffd2bf;
+		background: rgba(255,122,69,0.2);
+		border: 1px solid rgba(255,122,69,0.45);
 	}
 
 	/* ── Content card ── */
@@ -1206,47 +1325,30 @@
 	.meta {
 		display: flex;
 		align-items: center;
-		gap: 7px;
+		gap: 5px;
+		flex-wrap: wrap;
 		font-size: 0.88rem;
 		color: var(--text-muted);
-		margin-bottom: 5px;
+		margin-bottom: 12px;
 	}
-
-	.chips {
+	.meta .sep {
+		opacity: 0.4;
+		margin: 0 2px;
+	}
+	.dist-row {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 8px;
-		margin: 14px 0;
+		gap: 6px;
+		margin-bottom: 14px;
 	}
-	.chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		font-size: 0.75rem;
+	.dist {
+		font-size: 0.74rem;
 		font-weight: 700;
-		padding: 5px 12px;
-		border-radius: 999px;
-		border: 1px solid;
-	}
-	.chip-gold {
-		color: #fde68a;
-		background: rgba(245,158,11,0.12);
-		border-color: rgba(245,158,11,0.3);
-	}
-	.chip-green {
-		color: #86efac;
-		background: rgba(34,197,94,0.12);
-		border-color: rgba(34,197,94,0.3);
-	}
-	.chip-yellow {
-		color: #fde047;
-		background: rgba(234,179,8,0.12);
-		border-color: rgba(234,179,8,0.3);
-	}
-	.chip-muted {
-		color: #94a3b8;
-		background: rgba(100,116,139,0.1);
-		border-color: rgba(100,116,139,0.2);
+		padding: 4px 10px;
+		border-radius: 8px;
+		color: var(--text);
+		background: var(--soft);
+		border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 	}
 
 	/* ── Key facts ── */
@@ -1292,25 +1394,13 @@
 	.fact-urgent .fact-value { color: var(--color-urgent); }
 
 	.verdict {
-		padding: 14px 16px;
-		border-radius: 14px;
-		background: rgba(255,255,255,0.03);
-		border-left: 3px solid rgba(163,230,53,0.5);
-		margin-bottom: 16px;
-	}
-	.verdict-label {
-		font-size: 0.72rem;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		color: #a3e635;
-		margin-bottom: 4px;
-	}
-	.verdict-text {
-		font-size: 0.9rem;
-		color: #cbd5e1;
-		font-style: italic;
+		font-size: 0.86rem;
 		line-height: 1.5;
+		color: var(--text);
+		font-style: italic;
+		padding-left: 11px;
+		border-left: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+		margin-bottom: 16px;
 	}
 
 	.actions {
@@ -1325,17 +1415,28 @@
 	}
 	.btn-status {
 		flex: 1;
-		padding: 14px;
-		border-radius: 14px;
-		font-size: 0.95rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		padding: 12px;
+		border-radius: 13px;
+		font-size: 0.9rem;
 		font-weight: 700;
-		color: white;
-		background: rgba(255,255,255,0.07);
-		border: 1.5px solid rgba(255,255,255,0.1);
+		color: var(--text);
+		background: rgba(255,255,255,0.05);
+		border: 1.5px solid var(--line-strong);
 		cursor: pointer;
 		transition: all 0.15s;
 	}
-	.btn-status:hover { background: rgba(255,255,255,0.12); }
+	.btn-status:hover { background: rgba(255,255,255,0.09); }
+	.btn-count {
+		font-size: 0.74rem;
+		padding: 1px 7px;
+		border-radius: 999px;
+		background: rgba(255,255,255,0.1);
+		color: var(--text-muted);
+	}
 	.btn-status.active {
 		background: rgba(244,63,94,0.14);
 		border-color: rgba(244,63,94,0.4);
@@ -1350,6 +1451,38 @@
 		background: rgba(255,255,255,0.04);
 		border-radius: 12px;
 		padding: 12px 14px;
+	}
+	.bib-searching {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 0.85rem;
+		color: rgba(255,255,255,0.5);
+		padding: 4px 0;
+		animation: pulse-opacity 1.2s ease-in-out infinite;
+	}
+	@keyframes pulse-opacity {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0.45; }
+	}
+	.bib-autofound {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 0.82rem;
+		color: #a3e635;
+		margin-bottom: 8px;
+		padding: 6px 10px;
+		border-radius: 8px;
+		background: rgba(163,230,53,0.1);
+		border: 1px solid rgba(163,230,53,0.25);
+	}
+	.bib-autofound strong { color: white; }
+	.bib-no-result {
+		font-size: 0.82rem;
+		color: rgba(255,255,255,0.4);
+		margin: 0 0 8px;
+		font-style: italic;
 	}
 	.bib-label {
 		display: block;
@@ -1485,9 +1618,28 @@
 		align-items: center;
 		gap: 12px;
 	}
-	.my-result-distance {
-		font-size: 0.8rem;
-		color: rgba(255,255,255,0.5);
+	.my-result-meta {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.my-result-name {
+		font-size: 0.82rem;
+		font-weight: 700;
+		color: rgba(255,255,255,0.7);
+	}
+	.my-result-bib {
+		font-size: 0.75rem;
+		font-weight: 700;
+		color: rgba(255,255,255,0.35);
+		background: rgba(255,255,255,0.06);
+		padding: 2px 7px;
+		border-radius: 5px;
+	}
+	.my-result-dist {
+		font-size: 0.78rem;
+		color: rgba(255,255,255,0.4);
 		font-weight: 600;
 	}
 	.my-result-pos {

@@ -1,8 +1,9 @@
-import { redirect } from '@sveltejs/kit';
+import { redirect, fail } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { raceSeries, raceEditions, raceUserStatus, user } from '$lib/server/db/schema';
 import { eq, desc, sql } from 'drizzle-orm';
 import { forwardGeocode } from '$lib/server/geo';
+import { auth } from '$lib/server/auth';
 import type { PageServerLoad, Actions } from './$types';
 
 const DISTANCE_OPTIONS = ['5k', '10k', 'half', 'marathon', 'ultra', 'trail'] as const;
@@ -55,6 +56,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				firstSeenAt: t.firstSeenAt.toISOString()
 			}
 		})),
+		userName: me?.name ?? '',
+		userEmail: me?.email ?? '',
 		userCity: me?.city ?? '',
 		userCountry: me?.country ?? 'NO',
 		userGender: (me as { gender?: string | null } | undefined)?.gender ?? '',
@@ -76,7 +79,7 @@ export const actions: Actions = {
 
 		const radiusRaw = parseInt((form.get('travelRadiusKm') as string) ?? '', 10);
 		const travelRadiusKm = Number.isFinite(radiusRaw)
-			? Math.min(2000, Math.max(5, radiusRaw))
+			? Math.min(9999, Math.max(10, radiusRaw))
 			: 150;
 
 		const targetDistances = (form.getAll('targetDistances') as string[]).filter((d) =>
@@ -115,5 +118,36 @@ export const actions: Actions = {
 
 		await db.update(user).set(patch).where(eq(user.id, locals.user.id));
 		return { success: true };
+	},
+
+	updateName: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		const form = await request.formData();
+		const name = (form.get('name') as string)?.trim();
+		if (!name || name.length < 2) return fail(400, { nameError: 'Name must be at least 2 characters.' });
+		if (name.length > 80) return fail(400, { nameError: 'Name is too long.' });
+		await db.update(user).set({ name }).where(eq(user.id, locals.user.id));
+		return { nameSuccess: true };
+	},
+
+	changePassword: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		const form = await request.formData();
+		const currentPassword = (form.get('currentPassword') as string) ?? '';
+		const newPassword = (form.get('newPassword') as string) ?? '';
+		const confirmPassword = (form.get('confirmPassword') as string) ?? '';
+		if (!currentPassword || !newPassword) return fail(400, { pwError: 'All fields are required.' });
+		if (newPassword.length < 8) return fail(400, { pwError: 'New password must be at least 8 characters.' });
+		if (newPassword !== confirmPassword) return fail(400, { pwError: 'Passwords do not match.' });
+		try {
+			await auth.api.changePassword({
+				body: { currentPassword, newPassword, revokeOtherSessions: false },
+				headers: request.headers
+			});
+		} catch (e: unknown) {
+			const msg = e instanceof Error ? e.message : String(e);
+			return fail(400, { pwError: msg.includes('wrong') || msg.includes('invalid') ? 'Current password is incorrect.' : 'Could not change password.' });
+		}
+		return { pwSuccess: true };
 	}
 };

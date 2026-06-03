@@ -917,6 +917,85 @@ export async function lookupAllParticipants(distanceId: string): Promise<{
 		}));
 	}
 
+	const eqMatch = dist.resultsUrl.match(/live\.eqtiming\.com\/(\d+)/i);
+	if (eqMatch) {
+		const eventId = eqMatch[1];
+		// Get etapper list
+		const eventRes = await fetch(`https://live.eqtiming.com/api/event/${eventId}`, {
+			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)' },
+			signal: AbortSignal.timeout(10_000)
+		}).catch(() => null);
+		if (!eventRes?.ok) return [];
+
+		const eventData = await eventRes.json() as { Etapper?: Record<string, { UID: number; Navn: string; Distanse?: number }> };
+		const etapper = eventData.Etapper;
+		if (!etapper) return [];
+
+		// Pick the etappe matching this distance
+		const etappeList = Object.values(etapper);
+		let chosen = etappeList[0];
+		if (dist.distanceKm && etappeList.length > 1) {
+			const kmRound = Math.round(dist.distanceKm);
+			const distRe = new RegExp(`(?<![\\d.,])${kmRound}([.,]\\d+)?\\s?km`, 'i');
+			const variantRe = /stafett|relay|\blag\b|\bteam\b|barn|kids|mini/i;
+			let best = -Infinity;
+			for (const e of etappeList) {
+				let s = 0;
+				if (distRe.test(e.Navn)) s += 100;
+				if (variantRe.test(e.Navn)) s -= 200;
+				if (s > best) { best = s; chosen = e; }
+			}
+		}
+
+		// Try results first, then fall back to start list
+		const resultsRes = await fetch(
+			`https://live.eqtiming.com/api/Result/Total/${eventId}/${chosen.UID}?count=1000`,
+			{ headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)' }, signal: AbortSignal.timeout(15_000) }
+		).catch(() => null);
+
+		if (resultsRes?.ok) {
+			const data = await resultsRes.json() as { Items?: Array<{
+				Plassering?: { Total: number; Klasse: number };
+				Formatert?: string;
+				Deltaker?: {
+					Startnummer?: number;
+					FullStartnummer?: number | string;
+					Klubbnavn?: string;
+					Utover?: { NavnFormatert?: string; Fornavn?: string; Etternavn?: string };
+					Klasse?: { Navn?: string };
+				};
+			}> };
+			if (data.Items && data.Items.length > 0) {
+				return data.Items.map((item, i) => {
+					const d = item.Deltaker;
+					if (!d) return null;
+					const name = d.Utover?.NavnFormatert ?? [d.Utover?.Fornavn, d.Utover?.Etternavn].filter(Boolean).join(' ') ?? '';
+					return {
+						position: item.Plassering?.Total ?? i + 1,
+						name,
+						bibNumber: String(d.FullStartnummer ?? d.Startnummer ?? ''),
+						finishTime: item.Formatert ?? '',
+						category: d.Klasse?.Navn ?? null,
+						categoryPosition: item.Plassering?.Klasse ?? null,
+						club: d.Klubbnavn ?? null,
+					};
+				}).filter((e): e is NonNullable<typeof e> => !!e && !!e.name);
+			}
+		}
+
+		// Fall back to start list (pre-race)
+		const entries = await fetchEqTimingStartListForEtappe(eventId, chosen.UID);
+		return entries.map((e, i) => ({
+			position: i + 1,
+			name: e.name,
+			bibNumber: e.bibNumber || null,
+			finishTime: '',
+			category: e.category || null,
+			categoryPosition: null,
+			club: e.club || null,
+		}));
+	}
+
 	return [];
 }
 
@@ -959,6 +1038,48 @@ function nameMatchesQuery(name: string, queryLower: string): boolean {
 }
 
 /**
+ * Fetches the EQ Timing start list for one Etappe. Returns normalised entries
+ * (name + bib, no finish time) so pre-race lookups still work.
+ * Note: Items is a dict keyed by index ("0","1",...), not an array.
+ */
+async function fetchEqTimingStartListForEtappe(
+	eventId: string,
+	etappeUID: number,
+	maxCount = 1000
+): Promise<{
+	name: string;
+	bibNumber: string;
+	category: string;
+	club: string;
+}[]> {
+	const res = await fetch(
+		`https://live.eqtiming.com/api/Startlist/${eventId}/${etappeUID}?count=${maxCount}`,
+		{ headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)' }, signal: AbortSignal.timeout(15_000) }
+	).catch(() => null);
+	if (!res?.ok) return [];
+
+	const data = await res.json() as {
+		Items?: Record<string, {
+			Startnummer?: number;
+			FullStartnummer?: number | string | null;
+			Utover?: { NavnFormatert?: string; Fornavn?: string; Etternavn?: string };
+			Klasse?: { Navn?: string };
+			Klubbnavn?: string;
+		}>;
+	};
+	if (!data.Items || typeof data.Items !== 'object') return [];
+
+	return Object.values(data.Items).map(item => ({
+		name: item.Utover?.NavnFormatert
+			?? [item.Utover?.Fornavn, item.Utover?.Etternavn].filter(Boolean).join(' ')
+			?? '',
+		bibNumber: String(item.FullStartnummer ?? item.Startnummer ?? ''),
+		category: item.Klasse?.Navn ?? '',
+		club: item.Klubbnavn ?? ''
+	})).filter(e => e.name);
+}
+
+/**
  * Searches all EQ Timing Etapper for finishers whose name contains `queryLower`.
  */
 async function fetchEqTimingNameSearch(
@@ -998,6 +1119,8 @@ async function fetchEqTimingNameSearch(
 		distance: string | null;
 	}[] = [];
 
+	let anyResultsFound = false;
+
 	for (const etappe of etappeList) {
 		const resultsRes = await fetch(
 			`https://live.eqtiming.com/api/Result/Total/${eventId}/${etappe.UID}?count=1000`,
@@ -1021,7 +1144,8 @@ async function fetchEqTimingNameSearch(
 				};
 			}>;
 		};
-		if (!data.Items) continue;
+		if (!data.Items || data.Items.length === 0) continue;
+		anyResultsFound = true;
 
 		for (const item of data.Items) {
 			const d = item.Deltaker;
@@ -1040,6 +1164,29 @@ async function fetchEqTimingNameSearch(
 				distance: etappe.Navn
 			});
 			if (results.length >= 25) return results;
+		}
+	}
+
+	if (results.length > 0) return results;
+
+	// Pre-race fallback: no timing results yet → search the start lists
+	if (!anyResultsFound) {
+		for (const etappe of etappeList) {
+			const entries = await fetchEqTimingStartListForEtappe(eventId, etappe.UID);
+			for (const entry of entries) {
+				if (!nameMatchesQuery(entry.name, queryLower)) continue;
+				results.push({
+					position: null,
+					name: entry.name,
+					bibNumber: entry.bibNumber || null,
+					finishTime: '',
+					category: entry.category || null,
+					categoryPosition: null,
+					club: entry.club || null,
+					distance: etappe.Navn
+				});
+				if (results.length >= 25) return results;
+			}
 		}
 	}
 
@@ -1367,6 +1514,7 @@ async function fetchEqTimingBibSearch(
 	}[] = [];
 
 	// Search ALL Etapper for this bib
+	let anyResultsFound = false;
 	for (const etappe of etappeList) {
 		const resultsRes = await fetch(
 			`https://live.eqtiming.com/api/Result/Total/${eventId}/${etappe.UID}?count=1000`,
@@ -1378,7 +1526,8 @@ async function fetchEqTimingBibSearch(
 		if (!resultsRes?.ok) continue;
 
 		const data = await resultsRes.json() as { Items?: Array<Record<string, unknown>> };
-		if (!data.Items) continue;
+		if (!data.Items || data.Items.length === 0) continue;
+		anyResultsFound = true;
 
 		const item = data.Items.find((i: Record<string, unknown>) => {
 			const d = i.Deltaker as Record<string, unknown> | undefined;
@@ -1410,6 +1559,27 @@ async function fetchEqTimingBibSearch(
 			club: d.Klubbnavn ?? null,
 			distance: etappe.Navn
 		});
+	}
+
+	if (results.length > 0) return results;
+
+	// Pre-race fallback: no timing results yet → search the start lists
+	if (!anyResultsFound) {
+		for (const etappe of etappeList) {
+			const entries = await fetchEqTimingStartListForEtappe(eventId, etappe.UID);
+			const entry = entries.find(e => e.bibNumber === bib);
+			if (!entry) continue;
+			results.push({
+				position: null,
+				name: entry.name,
+				bibNumber: bib,
+				finishTime: '',
+				category: entry.category || null,
+				categoryPosition: null,
+				club: entry.club || null,
+				distance: etappe.Navn
+			});
+		}
 	}
 
 	return results;

@@ -825,6 +825,7 @@ export async function lookupBibResult(
 
 	// 2. Try timing provider
 	const dist = await db.query.raceDistances.findFirst({ where: eq(raceDistances.id, distanceId) });
+	console.log(`[lookupBibResult] distanceId=${distanceId} resultsUrl=${dist?.resultsUrl}`);
 	if (!dist?.resultsUrl) return [];
 	const race = { resultsUrl: dist.resultsUrl, distanceKm: dist.distanceKm };
 
@@ -869,6 +870,7 @@ export async function lookupNameResult(
 	if (q.length < 2) return [];
 
 	const dist = await db.query.raceDistances.findFirst({ where: eq(raceDistances.id, distanceId) });
+	console.log(`[lookupNameResult] distanceId=${distanceId} resultsUrl=${dist?.resultsUrl}`);
 	if (!dist?.resultsUrl) return [];
 
 	const eqMatch = dist.resultsUrl.match(/live\.eqtiming\.com\/(\d+)/i);
@@ -881,7 +883,63 @@ export async function lookupNameResult(
 		return fetchRaceResultNameSearch(rrMatch[1], q);
 	}
 
+	console.log(`[lookupNameResult] no provider matched for url: ${dist.resultsUrl}`);
 	return [];
+}
+
+/**
+ * Fetches all participants/finishers for a race distance, used to populate the leaderboard
+ * even before results are scraped. Returns entries with empty finishTime for pre-race.
+ */
+export async function lookupAllParticipants(distanceId: string): Promise<{
+	position: number | null;
+	name: string;
+	bibNumber: string | null;
+	finishTime: string;
+	category: string | null;
+	categoryPosition: number | null;
+	club: string | null;
+}[]> {
+	const dist = await db.query.raceDistances.findFirst({ where: eq(raceDistances.id, distanceId) });
+	if (!dist?.resultsUrl) return [];
+
+	const rrMatch = dist.resultsUrl.match(/my\.raceresult\.com\/(\d+)/i);
+	if (rrMatch) {
+		const entries = await fetchRaceResultAllParticipants(rrMatch[1]);
+		return entries.map(e => ({
+			position: e.position,
+			name: e.name,
+			bibNumber: e.bibNumber,
+			finishTime: e.finishTime,
+			category: e.category,
+			categoryPosition: e.categoryPosition,
+			club: e.club,
+		}));
+	}
+
+	return [];
+}
+
+/**
+ * Returns the total participant/finisher count for a distance from its timing provider.
+ * Lightweight — only fetches the first page and reads the trailing count row.
+ */
+export async function lookupParticipantCount(distanceId: string): Promise<number | null> {
+	const dist = await db.query.raceDistances.findFirst({ where: eq(raceDistances.id, distanceId) });
+	if (!dist?.resultsUrl) return null;
+
+	const rrMatch = dist.resultsUrl.match(/my\.raceresult\.com\/(\d+)/i);
+	if (rrMatch) {
+		// Fetch just 1 entry — we only want the totalCount attached by fetchRaceResultList
+		const results = await fetchRaceResultList(rrMatch[1], 'results', '', 1);
+		const count = (results as typeof results & { totalCount?: number }).totalCount;
+		if (count) return count;
+		// Fall back to participants tab
+		const parts = await fetchRaceResultList(rrMatch[1], 'participants', '', 1);
+		return (parts as typeof parts & { totalCount?: number }).totalCount ?? null;
+	}
+
+	return null;
 }
 
 /**
@@ -891,8 +949,13 @@ export async function lookupNameResult(
  */
 function nameMatchesQuery(name: string, queryLower: string): boolean {
 	const n = name.toLowerCase();
-	if (queryLower.includes(' ')) return n.includes(queryLower);
-	return n.split(/[\s\-/]+/).some((tok) => tok.startsWith(queryLower));
+	if (queryLower.includes(' ')) {
+		// Exact substring first (handles "Firstname Lastname" format)
+		if (n.includes(queryLower)) return true;
+		// Also accept if every word in the query appears in the name (handles "Lastname, Firstname" format)
+		return queryLower.split(/\s+/).every(word => n.split(/[\s\-/,]+/).some(tok => tok.startsWith(word)));
+	}
+	return n.split(/[\s\-/,]+/).some((tok) => tok.startsWith(queryLower));
 }
 
 /**
@@ -983,7 +1046,7 @@ async function fetchEqTimingNameSearch(
 	return results;
 }
 
-type RaceResultRow = string[];
+type RaceResultRow = (string | number)[];
 
 type RaceResultEntry = {
 	position: number | null;
@@ -1002,26 +1065,34 @@ type RaceResultEntry = {
 async function fetchRaceResultList(
 	eventId: string,
 	tab: string,
-	term: string
+	term: string,
+	maxEntries = 25
 ): Promise<RaceResultEntry[]> {
-	const configRes = await fetch(
-		`https://my.raceresult.com/${eventId}/${tab}/config?lang=en&noVisitor=1`,
-		{
-			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)' },
-			signal: AbortSignal.timeout(10_000)
-		}
-	).catch(() => null);
-	if (!configRes?.ok) return [];
+	const configUrl = `https://my.raceresult.com/${eventId}/${tab}/config?lang=en&noVisitor=1`;
+	console.log(`[RaceResult] fetchRaceResultList eventId=${eventId} tab=${tab} term=${term}`);
+
+	const configRes = await fetch(configUrl, {
+		headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)' },
+		signal: AbortSignal.timeout(10_000)
+	}).catch((e) => { console.error('[RaceResult] config fetch error:', e); return null; });
+	if (!configRes?.ok) {
+		console.error(`[RaceResult] config fetch failed: status=${configRes?.status}`);
+		return [];
+	}
 
 	const config = await configRes.json() as {
 		key?: string;
 		server?: string;
-		Tab?: { Config?: { Lists?: Array<{ Name: string; Live?: number }> } };
+		TabConfig?: { Lists?: Array<{ Name: string; Live?: number }> };
 	};
 	const key = config.key;
 	const server = config.server ? `https://${config.server}` : 'https://my.raceresult.com';
-	const lists: Array<{ Name: string; Live?: number }> = config.Tab?.Config?.Lists ?? [];
-	if (!key || lists.length === 0) return [];
+	const lists: Array<{ Name: string; Live?: number }> = config.TabConfig?.Lists ?? [];
+	console.log(`[RaceResult] key=${key} server=${server} lists=${JSON.stringify(lists.map(l => l.Name))}`);
+	if (!key || lists.length === 0) {
+		console.error(`[RaceResult] aborting: key=${key} lists.length=${lists.length}`);
+		return [];
+	}
 
 	// Pick best list for results tab (prefer Overall/non-live); for participants take first
 	const bestList = tab === 'results'
@@ -1029,6 +1100,7 @@ async function fetchRaceResultList(
 		   lists.find(l => l.Live === 0 && !/top.?\d|gun|kjønn|gender|aldersgruppe/i.test(l.Name)) ??
 		   lists[0])
 		: lists[0];
+	console.log(`[RaceResult] using list: ${bestList.Name}`);
 
 	const params = new URLSearchParams({
 		key,
@@ -1040,14 +1112,19 @@ async function fetchRaceResultList(
 		noVisitor: '1'
 	});
 
-	const listRes = await fetch(`${server}/${eventId}/${tab}/list?${params}`, {
+	const listUrl = `${server}/${eventId}/${tab}/list?${params}`;
+	console.log(`[RaceResult] fetching list: ${listUrl}`);
+	const listRes = await fetch(listUrl, {
 		headers: {
 			'User-Agent': 'Mozilla/5.0 (compatible; PaceFinder/1.0)',
 			Cookie: `ys${eventId}=1`
 		},
 		signal: AbortSignal.timeout(10_000)
-	}).catch(() => null);
-	if (!listRes?.ok) return [];
+	}).catch((e) => { console.error('[RaceResult] list fetch error:', e); return null; });
+	if (!listRes?.ok) {
+		console.error(`[RaceResult] list fetch failed: status=${listRes?.status}`);
+		return [];
+	}
 
 	const listData = await listRes.json() as {
 		DataFields?: string[];
@@ -1060,29 +1137,55 @@ async function fetchRaceResultList(
 	const finishIdx = dataFields.findIndex(f => /FINISH\.CHIP|WithStatus.*FINISH/i.test(f));
 	const lastDataIdx = dataFields.length - 1 -
 		[...dataFields].reverse().findIndex(f => !/^SWITCH\(|^C\(/.test(f));
+	console.log(`[RaceResult] DataFields=${JSON.stringify(dataFields)} bibIdx=${bibIdx} nameIdx=${nameIdx}`);
+	console.log(`[RaceResult] data contest keys=${JSON.stringify(Object.keys(listData.data ?? {}))}`);
 
 	const entries: RaceResultEntry[] = [];
-	for (const [contestKey, rows] of Object.entries(listData.data ?? {})) {
+	let totalCount = 0;
+	const dataEntries = Array.isArray(listData.data)
+		? []
+		: Object.entries(listData.data ?? {});
+	for (const [contestKey, rows] of dataEntries) {
+		if (!Array.isArray(rows)) continue;
 		const distLabel = contestKey.replace(/^#\d+_/, '').replace(/_/g, ' ') || null;
 		for (const row of rows) {
+			if (row.length < 2) {
+				// trailing total-count row — accumulate it
+				if (typeof row[0] === 'number') totalCount += row[0];
+				continue;
+			}
 			const name = nameIdx >= 0 ? (row[nameIdx] ?? '') : (row[2] ?? row[3] ?? '');
 			const bib = bibIdx >= 0 ? row[bibIdx] : row[0];
 			const rawTime = finishIdx >= 0 ? row[finishIdx] : (row[lastDataIdx] ?? row[10] ?? '');
-			const finishTime = /^[A-Z(]/.test(rawTime ?? '') ? '' : (rawTime ?? '');
+			const finishTime = /^[A-Z(]/.test(String(rawTime ?? '')) ? '' : String(rawTime ?? '');
 			entries.push({
 				position: null,
-				name,
-				bibNumber: bib || null,
+				name: String(name),
+				bibNumber: bib != null && bib !== '' ? String(bib) : null,
 				finishTime,
 				category: null,
 				categoryPosition: null,
 				club: null,
 				distance: distLabel
 			});
-			if (entries.length >= 25) return entries;
+			if (entries.length >= maxEntries) return entries;
 		}
 	}
+	console.log(`[RaceResult] returning ${entries.length} entries, totalCount=${totalCount}`);
+	// Attach totalCount as a non-enumerable property so callers can read it if needed
+	(entries as RaceResultEntry[] & { totalCount?: number }).totalCount = totalCount || entries.length;
 	return entries;
+}
+
+/**
+ * Fetches all participants (or finishers) for a RaceResult event as a leaderboard.
+ * Used when no scraped results exist yet — returns participants with empty finish times.
+ */
+async function fetchRaceResultAllParticipants(eventId: string): Promise<RaceResultEntry[]> {
+	// Try results first (post-race), fall back to participants list (pre-race)
+	const fromResults = await fetchRaceResultList(eventId, 'results', '', 500);
+	if (fromResults.length > 0) return fromResults;
+	return fetchRaceResultList(eventId, 'participants', '', 500);
 }
 
 /**

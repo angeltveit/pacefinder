@@ -32,12 +32,17 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			.delete(raceUserStatus)
 			.where(and(eq(raceUserStatus.userId, userId), eq(raceUserStatus.editionId, editionId)));
 	} else {
+		// Only include bibNumber in the upsert if it was explicitly provided in the request.
+		// Omitting it prevents status-only updates from wiping a saved bib.
+		const bibProvided = 'bibNumber' in parsed.data;
 		await db
 			.insert(raceUserStatus)
-			.values({ userId, editionId, status, bibNumber: bibNumber ?? null, notes, updatedAt: new Date() })
+			.values({ userId, editionId, status, bibNumber: bibProvided ? (bibNumber ?? null) : null, notes, updatedAt: new Date() })
 			.onConflictDoUpdate({
 				target: [raceUserStatus.userId, raceUserStatus.editionId],
-				set: { status, bibNumber: bibNumber ?? null, notes, updatedAt: new Date() }
+				set: bibProvided
+					? { status, bibNumber: bibNumber ?? null, notes, updatedAt: new Date() }
+					: { status, notes, updatedAt: new Date() }
 			});
 	}
 

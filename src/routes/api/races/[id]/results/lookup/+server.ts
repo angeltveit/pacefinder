@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { raceResults, raceDistances, raceEditions } from '$lib/server/db/schema';
 import { eq, and, inArray, ilike } from 'drizzle-orm';
-import { lookupBibResult, lookupNameResult } from '$lib/server/agent/results';
+import { lookupBibResult, lookupNameResult, lookupAllParticipants, lookupParticipantCount } from '$lib/server/agent/results';
 import type { RequestHandler } from './$types';
 
 type BibResult = {
@@ -51,73 +51,73 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 
 	if (rawQuery && isBib) {
 		const bib = rawQuery;
-		// Check stored results for this distance first, then siblings
-		const inStored = results.find((r) => r.bibNumber?.trim() === bib);
-		if (inStored) {
-			bibResults = [{ ...inStored, distance: null }];
-		} else {
-			// Try siblings in DB before doing a live timing provider lookup
-			const siblingIds = allDistanceIds.filter((id) => id !== params.id);
-			if (siblingIds.length > 0) {
-				const siblingRows = await db
-					.select()
-					.from(raceResults)
-					.where(inArray(raceResults.distanceId, siblingIds));
-				const inSibling = siblingRows.find((r) => r.bibNumber?.trim() === bib);
-				if (inSibling) {
-					bibResults = [{ position: inSibling.position, name: inSibling.name, bibNumber: inSibling.bibNumber, finishTime: inSibling.finishTime ?? '', category: inSibling.category, categoryPosition: inSibling.categoryPosition, club: inSibling.club, distance: inSibling.distance }];
-				}
-			}
-			if (bibResults.length === 0) {
-				bibResults = await lookupBibResult(params.id, bib);
-				// Persist live results so future loads don't need a re-fetch
-				if (bibResults.length > 0) {
-					const { distance: _dist, ...r } = bibResults[0];
-					const already = await db.query.raceResults.findFirst({
-						where: and(eq(raceResults.distanceId, params.id), eq(raceResults.bibNumber, bib))
-					});
-					if (!already) {
-						await db.insert(raceResults).values({
-							distanceId: params.id,
-							position: r.position,
-							name: r.name,
-							bibNumber: r.bibNumber,
-							finishTime: r.finishTime,
-							category: r.category,
-							categoryPosition: r.categoryPosition,
-							club: r.club
-						});
+		// Always hit the live timing provider first for fresh data
+		bibResults = await lookupBibResult(params.id, bib);
+
+		// Fall back to DB leaderboard (agent-scraped) only if live lookup found nothing
+		if (bibResults.length === 0) {
+			const inStored = results.find((r) => r.bibNumber?.trim() === bib);
+			if (inStored) {
+				bibResults = [{ ...inStored, distance: null }];
+			} else {
+				const siblingIds = allDistanceIds.filter((id) => id !== params.id);
+				if (siblingIds.length > 0) {
+					const siblingRows = await db
+						.select()
+						.from(raceResults)
+						.where(inArray(raceResults.distanceId, siblingIds));
+					const inSibling = siblingRows.find((r) => r.bibNumber?.trim() === bib);
+					if (inSibling) {
+						bibResults = [{ position: inSibling.position, name: inSibling.name, bibNumber: inSibling.bibNumber, finishTime: inSibling.finishTime ?? '', category: inSibling.category, categoryPosition: inSibling.categoryPosition, club: inSibling.club, distance: inSibling.distance }];
 					}
 				}
 			}
 		}
 	} else if (rawQuery) {
-		// Name search across this distance + siblings (stored results first)
-		const nameRows = await db
-			.select()
-			.from(raceResults)
-			.where(and(inArray(raceResults.distanceId, allDistanceIds), ilike(raceResults.name, `%${rawQuery}%`)))
-			.orderBy(raceResults.position)
-			.limit(25);
-		bibResults = nameRows.map((r) => ({
-			position: r.position,
-			name: r.name,
-			bibNumber: r.bibNumber,
-			finishTime: r.finishTime ?? '',
-			category: r.category,
-			categoryPosition: r.categoryPosition,
-			club: r.club,
-			distance: r.distanceId === params.id ? null : r.distance
-		}));
+		// Always hit the live provider first for name searches
+		bibResults = await lookupNameResult(params.id, rawQuery);
 
-		// Stored results are only the top-20 leaderboard — fall back to a live
-		// provider search so we can find every finisher by name.
+		// Fall back to DB leaderboard if live provider returned nothing
 		if (bibResults.length === 0) {
-			bibResults = await lookupNameResult(params.id, rawQuery);
+			const nameRows = await db
+				.select()
+				.from(raceResults)
+				.where(and(inArray(raceResults.distanceId, allDistanceIds), ilike(raceResults.name, `%${rawQuery}%`)))
+				.orderBy(raceResults.position)
+				.limit(25);
+			bibResults = nameRows.map((r) => ({
+				position: r.position,
+				name: r.name,
+				bibNumber: r.bibNumber,
+				finishTime: r.finishTime ?? '',
+				category: r.category,
+				categoryPosition: r.categoryPosition,
+				club: r.club,
+				distance: r.distanceId === params.id ? null : r.distance
+			}));
 		}
 	}
 
-	return json({ results, bibResults });
+	// No query and no scraped leaderboard — fetch all participants/finishers from live provider
+	let allParticipants: typeof results = [];
+	let participantCount: number | null = null;
+	if (!rawQuery && results.length === 0) {
+		const live = await lookupAllParticipants(params.id);
+		participantCount = live.length;
+		allParticipants = live.map(e => ({
+			position: e.position,
+			name: e.name,
+			bibNumber: e.bibNumber,
+			finishTime: e.finishTime || '—',
+			category: e.category,
+			categoryPosition: e.categoryPosition,
+			club: e.club
+		}));
+	} else if (!rawQuery) {
+		participantCount = results.length;
+	}
+
+	return json({ results: results.length > 0 ? results : allParticipants, bibResults, participantCount });
 };
 
 

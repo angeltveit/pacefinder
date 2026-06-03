@@ -6,7 +6,10 @@
 	let commentBody = $state('');
 	let submitting = $state(false);
 	let comments = $state(untrack(() => data.comments));
-	let results = $state(untrack(() => data.results));
+	let leaderboards = $state<Record<string, typeof data.results>>({ [data.race.id]: data.results });
+	let activeTabId = $state(data.race.id);
+	let participantCounts = $state<Record<string, number>>({ [data.race.id]: data.results.length });
+	const results = $derived(leaderboards[activeTabId] ?? []);
 	let myStatus = $state(untrack(() => data.myStatus));
 	let myBib = $state(untrack(() => data.myBib ?? ''));
 	let bibInput = $state(untrack(() => data.myBib ?? ''));
@@ -33,7 +36,8 @@
 			prevRaceId = data.race.id;
 			prevResultsUrl = data.race.resultsUrl;
 			comments = data.comments;
-			results = data.results;
+			leaderboards = { [data.race.id]: data.results };
+			activeTabId = data.race.id;
 			myStatus = data.myStatus;
 			myBib = data.myBib ?? '';
 			bibInput = data.myBib ?? '';
@@ -69,7 +73,6 @@
 					results: typeof data.results;
 					bibResults: typeof bibResults;
 				};
-				results = json.results;
 				searchResults = json.bibResults;
 			} else {
 				searchResults = [];
@@ -140,10 +143,12 @@
 			? autoSearchBibByName()
 			: null;
 
+		// Do NOT include bibNumber here — we're only changing status.
+		// Sending bibNumber: null would wipe a previously saved bib.
 		const res = await fetch(`/api/races/${data.race.id}/status`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ status, bibNumber: myBib || null })
+			body: JSON.stringify({ status })
 		});
 		if (!res.ok) { myStatus = prev; return; }
 
@@ -160,7 +165,6 @@
 			const res = await fetch(`/api/races/${data.race.id}/results/lookup?q=${encodeURIComponent(name)}`);
 			if (res.ok) {
 				const json = await res.json() as { results: typeof data.results; bibResults: typeof bibResults };
-				results = json.results;
 				bibResults = json.bibResults;
 				// Pre-fill bib input if exactly one match found
 				if (json.bibResults.length === 1 && json.bibResults[0].bibNumber) {
@@ -208,12 +212,36 @@
 			const res = await fetch(`/api/races/${data.race.id}/results/lookup?bib=${encodeURIComponent(myBib)}`);
 			if (res.ok) {
 				const json = await res.json() as { results: typeof data.results; bibResults: typeof bibResults };
-				results = json.results;
 				bibResults = json.bibResults;
 			}
 		} finally {
 			refreshingResult = false;
 			startCooldown();
+		}
+	}
+
+	let loadingTab = $state(false);
+	async function switchTab(distanceId: string) {
+		activeTabId = distanceId;
+		if (leaderboards[distanceId] !== undefined) return;
+		loadingTab = true;
+		try {
+			const res = await fetch(`/api/races/${distanceId}/results/lookup`);
+			if (res.ok) {
+				const json = await res.json() as { results: typeof data.results; participantCount: number | null };
+				leaderboards = { ...leaderboards, [distanceId]: json.results };
+				if (json.participantCount != null) {
+					participantCounts = { ...participantCounts, [distanceId]: json.participantCount };
+				} else if (json.results.length > 0) {
+					participantCounts = { ...participantCounts, [distanceId]: json.results.length };
+				}
+			} else {
+				leaderboards = { ...leaderboards, [distanceId]: [] };
+			}
+		} catch {
+			leaderboards = { ...leaderboards, [distanceId]: [] };
+		} finally {
+			loadingTab = false;
 		}
 	}
 
@@ -331,14 +359,18 @@
 		fetchingResults = true;
 		researchLog = ['Searching for race results…'];
 		try {
-			const res = await fetch(`/api/races/${data.race.id}/results`, { method: 'POST' });
-			if (res.ok) {
-				const result = await res.json();
-				researchLog = result.log ?? ['Done!'];
-				setTimeout(() => window.location.reload(), 1500);
-			} else {
-				researchLog = [...researchLog, `Error: ${res.status} ${res.statusText}`];
+			const allIds = [data.race.id, ...data.siblings.map(s => s.id)];
+			for (const distId of allIds) {
+				researchLog = [...researchLog, `Fetching ${distId}…`];
+				const res = await fetch(`/api/races/${distId}/results`, { method: 'POST' });
+				if (res.ok) {
+					const result = await res.json();
+					researchLog = [...researchLog, ...(result.log ?? ['Done!'])];
+				} else {
+					researchLog = [...researchLog, `Error ${res.status} for ${distId}`];
+				}
 			}
+			setTimeout(() => window.location.reload(), 1500);
 		} catch (err) {
 			researchLog = [...researchLog, `Error: ${err}`];
 		} finally {
@@ -784,16 +816,18 @@
 	<!-- ═══ Other distances ═══ -->
 	{#if data.siblings.length > 0}
 		{@const allDistances = [
-			{ id: data.race.id, distanceKm: data.race.distanceKm, active: true },
-			...data.siblings.map(s => ({ id: s.id, distanceKm: s.distanceKm, active: false }))
+			{ id: data.race.id, distanceKm: data.race.distanceKm, name: data.race.name },
+			...data.siblings.map(s => ({ id: s.id, distanceKm: s.distanceKm, name: s.name }))
 		].sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0))}
 		<div class="distances-card">
-			<h3 class="distances-title">🏃 Also available at this event</h3>
 			<div class="distances-row">
 				{#each allDistances as d}
-					<a href="/races/{d.id}" class="distance-pill {d.active ? 'active' : ''}">
+					<button onclick={() => switchTab(d.id)} class="distance-pill {activeTabId === d.id ? 'active' : ''}">
 						{bigDistance(d.distanceKm)}
-					</a>
+						{#if participantCounts[d.id] != null}
+							<span class="distance-count">{participantCounts[d.id]}</span>
+						{/if}
+					</button>
 				{/each}
 			</div>
 		</div>
@@ -860,9 +894,12 @@
 	{/if}
 
 	<!-- ═══ Leaderboard ═══ -->
-	{#if results.length > 0}
+	{#if results.length > 0 || loadingTab || (data.race.resultsUrl && isPast)}
 		<div class="leaderboard-card">
 			<h3 class="leaderboard-title">🏆 Results</h3>
+			{#if loadingTab}
+				<p class="lb-loading">Loading…</p>
+			{:else}
 			<div class="leaderboard-table">
 				<div class="lb-header">
 					<span class="lb-pos">#</span>
@@ -892,6 +929,7 @@
 				<a href={data.race.resultsUrl} target="_blank" rel="noopener noreferrer" class="lb-full-link">
 					View full results →
 				</a>
+			{/if}
 			{/if}
 		</div>
 	{/if}
@@ -1735,6 +1773,9 @@
 		gap: 8px;
 	}
 	.distance-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
 		padding: 8px 16px;
 		border-radius: 999px;
 		font-size: 0.85rem;
@@ -1745,6 +1786,11 @@
 		text-decoration: none;
 		transition: all 0.15s;
 	}
+	.distance-count {
+		font-size: 0.72rem;
+		font-weight: 600;
+		opacity: 0.65;
+	}
 	.distance-pill:hover {
 		color: white;
 		background: rgba(255,255,255,0.1);
@@ -1753,6 +1799,9 @@
 		color: #0c0f1a;
 		background: #a3e635;
 		border-color: #a3e635;
+	}
+	.distance-pill.active .distance-count {
+		opacity: 0.6;
 	}
 
 	/* ── Leaderboard ── */
@@ -2573,6 +2622,9 @@
 		gap: 8px;
 	}
 	.distance-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
 		padding: 8px 16px;
 		border-radius: 999px;
 		font-size: 0.85rem;
@@ -2591,5 +2643,8 @@
 		color: #0c0f1a;
 		background: #a3e635;
 		border-color: #a3e635;
+	}
+	.distance-pill.active .distance-count {
+		opacity: 0.6;
 	}
 </style>

@@ -10,6 +10,7 @@ import {
 	user
 } from '$lib/server/db/schema';import { eq, sql, and, isNull, asc, inArray } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
+import { lookupBibResult } from '$lib/server/agent/results';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -97,6 +98,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 				...r,
 				distance: r.distanceKm ? `${r.distanceKm} km` : null
 			};
+		} else {
+			// Not in scraped leaderboard — query the live timing provider
+			const live = await lookupBibResult(params.id, myBib);
+			if (live.length > 0) myResult = live[0];
 		}
 	}
 

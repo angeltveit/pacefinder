@@ -6,6 +6,7 @@
  * cache aggressively at the edge.
  */
 import { error } from '@sveltejs/kit';
+import { fetch as undiciFetch, Agent } from 'undici';
 import type { RequestHandler } from './$types';
 
 const MAX_BYTES = 8 * 1024 * 1024; // 8 MB safety cap
@@ -47,21 +48,35 @@ export const GET: RequestHandler = async ({ url, fetch, setHeaders }) => {
 		throw error(403, 'Host not allowed');
 	}
 
+	const requestHeaders = {
+		'User-Agent':
+			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+		Accept: 'image/avif,image/webp,image/png,image/jpeg,*/*',
+		// A same-origin-looking Referer defeats most hotlink protection
+		Referer: `${parsed.protocol}//${parsed.host}/`
+	};
+
 	let res: Response;
 	try {
 		res = await fetch(parsed.href, {
-			headers: {
-				'User-Agent':
-					'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-				Accept: 'image/avif,image/webp,image/png,image/jpeg,*/*',
-				// A same-origin-looking Referer defeats most hotlink protection
-				Referer: `${parsed.protocol}//${parsed.host}/`
-			},
+			headers: requestHeaders,
 			redirect: 'follow',
 			signal: AbortSignal.timeout(12_000)
 		});
 	} catch {
-		throw error(502, 'Upstream fetch failed');
+		// Retry with SSL verification disabled — some race-timing sites have
+		// self-signed or unrecognised-CA certificates.
+		try {
+			const insecureAgent = new Agent({ connect: { rejectUnauthorized: false } });
+			res = await undiciFetch(parsed.href, {
+				headers: requestHeaders,
+				redirect: 'follow',
+				signal: AbortSignal.timeout(12_000),
+				dispatcher: insecureAgent
+			}) as unknown as Response;
+		} catch {
+			throw error(502, 'Upstream fetch failed');
+		}
 	}
 
 	if (!res.ok || !res.body) throw error(502, `Upstream ${res.status}`);

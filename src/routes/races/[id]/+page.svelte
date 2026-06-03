@@ -166,9 +166,10 @@
 			if (res.ok) {
 				const json = await res.json() as { results: typeof data.results; bibResults: typeof bibResults };
 				bibResults = json.bibResults;
-				// Pre-fill bib input if exactly one match found
+				// Auto-save if exactly one match found
 				if (json.bibResults.length === 1 && json.bibResults[0].bibNumber) {
 					bibInput = json.bibResults[0].bibNumber;
+					await saveBib();
 				}
 			}
 		} finally {

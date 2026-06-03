@@ -1073,7 +1073,11 @@ async function fetchEqTimingStartListForEtappe(
 		name: item.Utover?.NavnFormatert
 			?? [item.Utover?.Fornavn, item.Utover?.Etternavn].filter(Boolean).join(' ')
 			?? '',
-		bibNumber: String(item.FullStartnummer ?? item.Startnummer ?? ''),
+		// Treat bib 0 as unassigned — don't expose it
+		bibNumber: (() => {
+			const raw = String(item.FullStartnummer ?? item.Startnummer ?? '');
+			return raw === '0' || raw === '' ? '' : raw;
+		})(),
 		category: item.Klasse?.Navn ?? '',
 		club: item.Klubbnavn ?? ''
 	})).filter(e => e.name);
@@ -1175,10 +1179,12 @@ async function fetchEqTimingNameSearch(
 			const entries = await fetchEqTimingStartListForEtappe(eventId, etappe.UID);
 			for (const entry of entries) {
 				if (!nameMatchesQuery(entry.name, queryLower)) continue;
+				// Only return entries with an assigned bib — bib "" means not yet assigned
+				const bib = entry.bibNumber || null;
 				results.push({
 					position: null,
 					name: entry.name,
-					bibNumber: entry.bibNumber || null,
+					bibNumber: bib,
 					finishTime: '',
 					category: entry.category || null,
 					categoryPosition: null,
@@ -1563,8 +1569,9 @@ async function fetchEqTimingBibSearch(
 
 	if (results.length > 0) return results;
 
-	// Pre-race fallback: no timing results yet → search the start lists
-	if (!anyResultsFound) {
+	// Pre-race fallback: no timing results yet → search the start lists.
+	// Skip bib "0" — it means unassigned in EQ Timing and would match everyone.
+	if (!anyResultsFound && bib !== '0') {
 		for (const etappe of etappeList) {
 			const entries = await fetchEqTimingStartListForEtappe(eventId, etappe.UID);
 			const entry = entries.find(e => e.bibNumber === bib);

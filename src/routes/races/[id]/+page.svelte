@@ -166,7 +166,7 @@
 			if (res.ok) {
 				const json = await res.json() as { results: typeof data.results; bibResults: typeof bibResults };
 				bibResults = json.bibResults;
-				// Auto-save if exactly one match found
+				// Auto-save if exactly one match found with a real bib number
 				if (json.bibResults.length === 1 && json.bibResults[0].bibNumber) {
 					bibInput = json.bibResults[0].bibNumber;
 					await saveBib();

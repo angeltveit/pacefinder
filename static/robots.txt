@@ -1,3 +1,9 @@
 # allow crawling everything by default
 User-agent: *
-Disallow:
+Disallow: /admin
+Disallow: /api
+Disallow: /onboard
+Disallow: /profile
+Disallow: /followed
+
+Sitemap: https://pacefinder.online/sitemap.xml

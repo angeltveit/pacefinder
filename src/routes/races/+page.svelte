@@ -68,7 +68,16 @@
 
 </script>
 
-<svelte:head><title>Explore Races — PaceFinder</title></svelte:head>
+<svelte:head>
+	<title>Explore Races — PaceFinder</title>
+	<meta name="description" content="Browse {data.total} running races scouted across the Nordics and beyond — filter by distance, date and location." />
+	<meta property="og:title" content="Explore Races — PaceFinder" />
+	<meta property="og:description" content="Browse {data.total} running races scouted across the Nordics and beyond — filter by distance, date and location." />
+	<meta property="og:url" content="{data.origin}/races" />
+	<meta property="og:type" content="website" />
+	<meta name="twitter:title" content="Explore Races — PaceFinder" />
+	<meta name="twitter:description" content="Browse {data.total} running races scouted across the Nordics and beyond — filter by distance, date and location." />
+</svelte:head>
 
 <div class="page">
 	<!-- Header -->

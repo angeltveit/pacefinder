@@ -144,7 +144,16 @@
 	const cap = 8;
 </script>
 
-<svelte:head><title>PaceFinder — Discover Races</title></svelte:head>
+<svelte:head>
+	<title>PaceFinder — Discover Races</title>
+	<meta name="description" content="Find your next running race in the Nordics and beyond. Personalised picks, live results and registration all in one place." />
+	<meta property="og:title" content="PaceFinder — Discover Races" />
+	<meta property="og:description" content="Find your next running race in the Nordics and beyond. Personalised picks, live results and registration all in one place." />
+	<meta property="og:url" content="{data.origin}/" />
+	<meta property="og:type" content="website" />
+	<meta name="twitter:title" content="PaceFinder — Discover Races" />
+	<meta name="twitter:description" content="Find your next running race in the Nordics and beyond. Personalised picks, live results and registration all in one place." />
+</svelte:head>
 
 {#if data.coachEnabled}
 	<CoachChat gender={data.coachGender as never} name={data.user?.name ?? null} />

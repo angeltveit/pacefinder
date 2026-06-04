@@ -5,6 +5,13 @@
 	let { children, data } = $props();
 </script>
 
+<svelte:head>
+	<meta property="og:site_name" content="PaceFinder" />
+	<meta property="og:image" content="{data.origin}/images/social.png" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:image" content="{data.origin}/images/social.png" />
+</svelte:head>
+
 <div class="app-shell">
 	<Navbar user={data?.user ?? null} />
 	<main class="app-main">

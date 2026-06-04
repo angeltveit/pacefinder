@@ -13,7 +13,7 @@ import { error } from '@sveltejs/kit';
 import { lookupBibResult } from '$lib/server/agent/results';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
 	const userId = locals.user?.id ?? null;
 
 	// Load the distance plus its edition and series in one query
@@ -141,6 +141,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	}
 
 	return {
+		canonicalUrl: `${url.origin}/races/${params.id}`,
 		race: {
 			id: distance.id,
 			name: distance.name,

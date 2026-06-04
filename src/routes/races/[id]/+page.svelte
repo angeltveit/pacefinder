@@ -554,7 +554,41 @@
 	const missingEssentials = $derived(essentials.filter((e) => !e.value));
 </script>
 
-<svelte:head><title>{data.race.eventName} — PaceFinder</title></svelte:head>
+<svelte:head>
+	<title>{data.race.eventName} — PaceFinder</title>
+	{@const ogDesc = [
+		data.race.distanceKm ? `${data.race.distanceKm} km` : null,
+		data.race.raceDate ? new Date(data.race.raceDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : null,
+		data.race.city ?? null
+	].filter(Boolean).join(' · ')}
+	{@const ogImage = `${data.origin}/images/social.png`}
+	<link rel="canonical" href={data.canonicalUrl} />
+	<meta name="description" content={ogDesc} />
+	<meta property="og:title" content="{data.race.eventName} — PaceFinder" />
+	<meta property="og:description" content={ogDesc} />
+	<meta property="og:url" content={data.canonicalUrl} />
+	<meta property="og:image" content={ogImage} />
+	<meta property="og:type" content="website" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:title" content="{data.race.eventName} — PaceFinder" />
+	<meta name="twitter:description" content={ogDesc} />
+	<meta name="twitter:image" content={ogImage} />
+	{@html `<script type="application/ld+json">${JSON.stringify({
+		"@context": "https://schema.org",
+		"@type": "SportsEvent",
+		"name": data.race.eventName + (data.race.distanceKm ? ` ${data.race.distanceKm}km` : ''),
+		"url": data.canonicalUrl,
+		"startDate": data.race.raceDate ?? undefined,
+		"location": data.race.city ? {
+			"@type": "Place",
+			"name": [data.race.location, data.race.city].filter(Boolean).join(', '),
+			"address": { "@type": "PostalAddress", "addressLocality": data.race.city, "addressCountry": data.race.country }
+		} : undefined,
+		"organizer": { "@type": "Organization", "name": data.race.eventName, "url": data.race.websiteUrl ?? data.canonicalUrl },
+		"sport": "Running",
+		"image": ogImage
+	})}</script>`}
+</svelte:head>
 
 <div class="detail-page" style="--accent:{theme.color}; --soft:{theme.soft};">
 	<!-- Back link -->
@@ -693,7 +727,7 @@
 					</div>
 				{/if}
 			{/if}
-			{#if data.race.registrationUrl && !isPast && myStatus !== 'attending' && !myBib}
+			{#if data.race.registrationUrl && !isPast && myStatus !== 'attending'}
 				<a href={data.race.registrationUrl} target="_blank" rel="noopener noreferrer" class="btn-register">
 					Register →
 				</a>

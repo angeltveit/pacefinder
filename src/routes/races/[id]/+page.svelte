@@ -552,16 +552,17 @@
 	});
 	const knownEssentials = $derived(essentials.filter((e) => e.value));
 	const missingEssentials = $derived(essentials.filter((e) => !e.value));
+
+	const ogDesc = $derived([
+		data.race.distanceKm ? `${data.race.distanceKm} km` : null,
+		data.race.raceDate ? new Date(data.race.raceDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : null,
+		data.race.city ?? null
+	].filter(Boolean).join(' · '));
+	const ogImage = $derived(`${data.origin}/images/social.png`);
 </script>
 
 <svelte:head>
 	<title>{data.race.eventName} — PaceFinder</title>
-	{@const ogDesc = [
-		data.race.distanceKm ? `${data.race.distanceKm} km` : null,
-		data.race.raceDate ? new Date(data.race.raceDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : null,
-		data.race.city ?? null
-	].filter(Boolean).join(' · ')}
-	{@const ogImage = `${data.origin}/images/social.png`}
 	<link rel="canonical" href={data.canonicalUrl} />
 	<meta name="description" content={ogDesc} />
 	<meta property="og:title" content="{data.race.eventName} — PaceFinder" />
@@ -587,7 +588,7 @@
 		"organizer": { "@type": "Organization", "name": data.race.eventName, "url": data.race.websiteUrl ?? data.canonicalUrl },
 		"sport": "Running",
 		"image": ogImage
-	})}</script>`}
+	})}<\/script>`}
 </svelte:head>
 
 <div class="detail-page" style="--accent:{theme.color}; --soft:{theme.soft};">

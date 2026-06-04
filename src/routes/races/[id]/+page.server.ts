@@ -10,6 +10,7 @@ import {
 	user
 } from '$lib/server/db/schema';import { eq, sql, and, isNull, asc, inArray } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import { lookupBibResult } from '$lib/server/agent/results';
 import type { PageServerLoad } from './$types';
 
@@ -141,7 +142,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
 	}
 
 	return {
-		canonicalUrl: `${url.origin}/races/${params.id}`,
+		canonicalUrl: `${(env.PUBLIC_SITE_URL ?? url.origin).replace(/\/$/, '')}/races/${params.id}`,
 		race: {
 			id: distance.id,
 			name: distance.name,

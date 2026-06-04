@@ -1,10 +1,11 @@
 import { db } from '$lib/server/db';
 import { raceDistances } from '$lib/server/db/schema';
 import { asc } from 'drizzle-orm';
+import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url }) => {
-	const origin = url.origin;
+	const origin = (env.PUBLIC_SITE_URL ?? url.origin).replace(/\/$/, '');
 
 	const distances = await db
 		.select({ id: raceDistances.id, lastUpdatedAt: raceDistances.lastUpdatedAt })
